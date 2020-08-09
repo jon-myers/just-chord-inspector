@@ -1,11 +1,22 @@
 <template>
-  <div class="hello" @mousemove='mouseMove'>
+  <div class="hello" @mousemove='mouseMove' @click='click'>
     <canvas ref='canvas'></canvas>
   </div>
 </template>
 
 <script>
 const THREE = require('three');
+// const lodash = require('lodash');
+
+function nestedInclude(arr, value) {
+  const stringifiedValue = JSON.stringify(value);
+  for (const val of arr) {
+    if (JSON.stringify(val) === stringifiedValue) {
+      return true;
+    }
+  }
+  return false;
+}
 
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 
@@ -18,11 +29,14 @@ export default {
     return {
       gridColor: 0x6c6e73,
       sphereColor: 0x3461eb,
-      hoverColor: 0xffff00,
+      hoverColor: 0x54a5eb,
+      sphereOnColor: 0xae58e0,
       spheres: [],
       currentObj: undefined,
       fund: 100,
       slewTime: 0.1,
+      onSpheres: [],
+      oldCenter: [0, 0, 0]
     }
   },
   mounted() {
@@ -41,16 +55,17 @@ export default {
     });
     this.renderer.setSize( window.innerWidth, window.innerHeight );
     
-    const cubeSize = [4, 3, 2];
+    // const cubeSize = [4, 3, 2];
     const points = [];
     
-    for (let x = 0; x < cubeSize[0]; x++) {
-      for (let y = 0; y < cubeSize[1]; y++) {
-        for (let z = 0; z < cubeSize[2]; z++) {
-          points.push([x, y, z])
-        }
-      }
-    }
+    // for (let x = 0; x < cubeSize[0]; x++) {
+    //   for (let y = 0; y < cubeSize[1]; y++) {
+    //     for (let z = 0; z < cubeSize[2]; z++) {
+    //       points.push([x, y, z])
+    //     }
+    //   }
+    // }
+    points.push([0, 0, 0])
     
     // const points = [
     //   [0, 0, 0],
@@ -81,8 +96,25 @@ export default {
 
   methods: {
     
+    getCenter() {
+      let x = this.spheres.map(sphere => sphere.position.x);
+      let y = this.spheres.map(sphere => sphere.position.y);
+      let z = this.spheres.map(sphere => sphere.position.z);
+      console.log(x, y, z);
+      x = (Math.max(...x) + Math.min(...x)) / 2;
+      y = (Math.max(...y) + Math.min(...y)) / 2;
+      z = (Math.max(...z) + Math.min(...z)) / 2;
+      
+      console.log([x, y, z])
+      return [x, y, z]
+    },
+    
     drawPoints(points) {
-      points.forEach(point => this.addSphere(...point))
+      points.forEach(point => {
+        if (! nestedInclude(this.spheres.map(sphere => this.getPosition(sphere)), point)) {
+          this.addSphere(...point)
+        }
+      })
       this.getConnections(points)
     },
     
@@ -103,7 +135,7 @@ export default {
       this.ac = new AudioContext();
       this.masterGain = this.ac.createGain();
       
-      this.masterGain.gain.setValueAtTime(0.5, this.ac.currentTime);
+      this.masterGain.gain.setValueAtTime(0.1, this.ac.currentTime);
       
       this.masterGain.connect(this.ac.destination);
     },
@@ -126,7 +158,6 @@ export default {
     },
     
     stopNote(obj) {
-      console.log('stop note');
       obj.gainNode.gain.setValueAtTime(1, this.ac.currentTime);
       obj.gainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
       obj.osc.stop(this.ac.currentTime + this.slewTime);
@@ -135,7 +166,7 @@ export default {
     
     hoverOverSphere(obj) {
       if (obj != this.currentObj) {
-        if (this.currentObj) {
+        if (this.currentObj && ! this.onSpheres.includes(this.currentObj)) {
           this.currentObj.material.color.setHex(this.sphereColor);
           if (this.currentObj.osc) this.stopNote(this.currentObj);
         }
@@ -143,8 +174,10 @@ export default {
       }
       if (this.ac.state === 'suspended') this.ac.resume();
       if (!obj.osc) this.startNote(obj);
-      obj.material.color.setHex(this.hoverColor);
-      this.renderer.render(this.scene, this.camera);
+      if (! this.onSpheres.includes(obj)) {
+        obj.material.color.setHex(this.hoverColor);
+        this.renderer.render(this.scene, this.camera);
+      }
     },
     
     mouseMove(e) {
@@ -155,29 +188,89 @@ export default {
       if (intersects[0]) {
         this.hoverOverSphere(intersects[0].object);
       } else {
-        if (this.currentObj && this.currentObj.material.color.getHex() != this.sphereColor) {
+        if (this.currentObj && this.currentObj.material.color.getHex() === this.hoverColor && ! this.onSpheres.includes(this.currentObj)) {
           this.currentObj.material.color.setHex(this.sphereColor);
           this.stopNote(this.currentObj);
           this.renderer.render(this.scene, this.camera);
-          
+          this.currentObj = undefined;    
         }
-        
       }
     },
     
-    // update() {
-    //   this.raycaster.setFromCamera(this.mouse, this.camera);
-    //   const intersects = this.rayCaster.intersectObjects(this.scene.children);
-    //   console.log(intersects)
-    // },
+    click() {
+      if (this.currentObj) {
+        if (this.onSpheres.includes(this.currentObj)) {
+          this.turnSphereOff();
+        } else {
+          this.turnSphereOn();
+        } 
+      }
+      // console.log(this.spheres);
+    },
     
-    animate() {
-      requestAnimationFrame(this.animate);
+    turnSphereOn() {
+      this.onSpheres.push(this.currentObj);
+      this.showNeighbors(this.currentObj);
+      
+      this.currentObj.material.color.setHex(this.sphereOnColor);
+      // this.renderer.render(this.scene, this.camera);
+      this.render();
+      this.currentObj = undefined;
+    },
+    
+    turnSphereOff() {
+      this.onSpheres.splice(this.onSpheres.indexOf(this.currentObj), 1);
+      this.currentObj.material.color.setHex(this.hoverColor);
+      const remains = this.onSpheres.filter(sphere => {
+        return nestedInclude(this.currentObj.neighborPositions, this.getPosition(sphere))
+      });
+      const onSphereNeighbs = this.onSpheres.filter(sphere => sphere != this.currentObj).map(sphere => sphere.neighborPositions).flat();
+      
+      let neighbs = this.spheres.filter(sphere => nestedInclude(this.currentObj.neighborPositions, this.getPosition(sphere)));
+      neighbs = neighbs.filter(sphere => ! remains.includes(sphere));
+      neighbs = neighbs.filter(sphere => ! nestedInclude(onSphereNeighbs, this.getPosition(sphere)));
+      neighbs.forEach(sphere => this.scene.remove(sphere));
+      this.spheres = this.spheres.filter(sphere => sphere === this.currentObj || !neighbs.includes(sphere));
+      if (this.spheres.includes(this.currentObj) && ! nestedInclude(onSphereNeighbs, this.getPosition(this.currentObj))) {
+        this.scene.remove(this.currentObj);
+        this.spheres.splice(this.onSpheres.indexOf(this.currentObj), 1);
+      }
+      // this.renderer.render(this.scene, this.camera);
+      this.render();
+    },
+    
+    render() {
+      const center = this.getCenter();
+      this.camera.translateX(center[0] - this.oldCenter[0]);
+      this.camera.translateY(center[1] - this.oldCenter[1]);
+      this.camera.translateZ(center[2] - this.oldCenter[2]);
+      this.camera.lookAt(...center);
+      this.oldCenter = center;
+      this.camera.move
+      const removes = this.scene.children.filter(child => child.geometry && child.geometry.type === 'CylinderGeometry');
+      removes.forEach(child => this.scene.remove(child));
+      this.getConnections(this.spheres.map(sphere => this.getPosition(sphere)));
       this.renderer.render(this.scene, this.camera);
     },
+    
+    getPosition(obj) {
+      return [obj.position.x, obj.position.y, obj.position.z]
+    },
+    
+    showNeighbors(obj) {
+      const pos = this.getPosition(obj);
+      const nVec = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
+      const onSpherePositions = this.onSpheres.map(sphere => this.getPosition(sphere));
+      const neighborPositions = nVec.map(vec => [...Array(3).keys()].map(i => pos[i] + vec[i]));
+      
+      const newNeighborPositions = neighborPositions.filter(pos => ! nestedInclude(onSpherePositions, pos));
+      this.drawPoints(newNeighborPositions);
+      this.render();
+      obj.neighborPositions = neighborPositions;
+      },
 
     addSphere(x, y, z) {
-      const geometry = new THREE.SphereGeometry(0.25, 32, 32);
+      const geometry = new THREE.SphereGeometry(0.15, 32, 32);
       const material = new THREE.MeshPhongMaterial( {color: this.sphereColor} );
       const sphere = new THREE.Mesh( geometry, material );
       sphere.position.x = x
@@ -188,7 +281,7 @@ export default {
     },
 
     addConnection(a, b) {
-      var geometry = new THREE.CylinderGeometry( 0.03, 0.03, 1, 32);
+      var geometry = new THREE.CylinderGeometry( 0.01, 0.01, 1, 32);
       var material = new THREE.MeshPhongMaterial( {color: 0x3461eb});
       const cylinder = new THREE.Mesh( geometry, material );
       cylinder.position.x = (a[0] + b[0]) / 2;

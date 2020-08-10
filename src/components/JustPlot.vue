@@ -1,6 +1,28 @@
 <template>
   <div class="hello" @mousemove='mouseMove' @click='click'>
     <canvas ref='canvas'></canvas>
+    <div id='controls'>
+      <label>Playback Mode</label>
+      <div class='subControl' v-for="mode in playbackModes" :key='mode.id'>
+        <input 
+          type='radio' 
+          id='mode.id' 
+          name='playbackMode' 
+          :value='mode.id' 
+          :checked='mode.state'
+          v-model='checked'
+          @change='updatePlaybackMode'
+        >
+        <label for='mode.id'>{{mode.id}}</label>
+      </div>
+      
+      <label>Display</label>
+      <div class='subControl' v-for="display in displays" :key='display.id'>
+        <input type='checkbox' v-model='display.checked' @change='updateDisplay'>
+        <label>{{display.id}}</label>
+      </div>
+      
+    </div>
   </div>
 </template>
 
@@ -36,76 +58,174 @@ export default {
       fund: 100,
       slewTime: 0.1,
       onSpheres: [],
-      oldCenter: [0, 0, 0]
+      oldCenter: [0, 0, 0],
+      checked: 'fixed',
+      maxGain: 1,
+      
+      playbackModes: {
+        fixed: {
+          id: 'fixed',
+          state: true,
+        },
+        off: {
+          id: 'off',
+          state: false,
+        },
+        drone: {
+          id: 'drone',
+          state: false,
+        }
+      },
+      
+      displays: {
+        spheres: {
+          id: 'spheres',
+          checked: true,
+        },
+        possibilities: {
+          id: 'possibilites',
+          checked: true,
+        },
+        connections: {
+          id: 'connections',
+          checked: true,
+        }
+      }
     }
   },
   mounted() {
     this.setUpAudio();
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
-    // this.camera = new THREE.OrthographicCamera(-10, 10, -10, 10, -10, 100)
-    
-    // this.projector = new THREE.Projector();
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
-    
-    
     this.renderer = new THREE.WebGLRenderer({
       canvas: this.$refs.canvas
     });
-    this.renderer.setSize( window.innerWidth, window.innerHeight );
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    window.addEventListener('resize', this.updateWindowSize);
     
-    // const cubeSize = [4, 3, 2];
     const points = [];
-    
-    // for (let x = 0; x < cubeSize[0]; x++) {
-    //   for (let y = 0; y < cubeSize[1]; y++) {
-    //     for (let z = 0; z < cubeSize[2]; z++) {
-    //       points.push([x, y, z])
-    //     }
-    //   }
-    // }
     points.push([0, 0, 0])
-    
-    // const points = [
-    //   [0, 0, 0],
-    //   [0, 0, 1],
-    //   [0, 1, 0],
-    //   [1, 0, 0],
-    //   [0, 1, 1],
-    //   [1, 0, 1], 
-    //   [1, 1, 0],
-    //   [1, 1, 1]  
-    // ]
     
     this.drawPoints(points);
     
-    // this.addGrid(2, 2, 2)
-    
     var light = new THREE.HemisphereLight( 0xffffbb, 0x080820, 1 );
     this.scene.add( light );
-
+    
+    // enable all layers
+    this.camera.layers.enable(0);
+    this.camera.layers.enable(1);
+    this.camera.layers.enable(2);
+    this.camera.layers.enable(3);
+    
+    light.layers.enable(0);
+    light.layers.enable(1);
+    light.layers.enable(2);
+    light.layers.enable(3);
+    
+    this.raycaster.layers.enable(0);
+    this.raycaster.layers.enable(1);
+    
+    
     this.camera.position.z = 5;
     this.camera.position.x = 3;
     this.camera.position.y = 3
-    this.camera.lookAt(0, 0, 0);
-    // this.animate()
-    
+    this.camera.lookAt(0, 0, 0);    
     this.renderer.render(this.scene, this.camera);
   },
 
   methods: {
     
+    updateDisplay() {
+      this.camera.layers.disableAll();
+      if (this.displays.spheres.checked) {
+        this.camera.layers.enable(1);
+        if (this.displays.connections.checked) {
+          this.camera.layers.enable(3);
+        }
+      } 
+      
+      if (this.displays.possibilities.checked) {
+        this.camera.layers.enable(0);
+        if (this.displays.connections.checked) this.camera.layers.enable(2);
+      }
+      this.renderer.render(this.scene, this.camera);
+      
+    },
+    
+    animate() {
+      this.animator = requestAnimationFrame(this.animate);
+      this.onSpheres.forEach(sphere => {
+        sphere.material.opacity = sphere.gainNode.gain.value / this.maxGain
+      })
+      this.renderer.render(this.scene, this.camera);
+    },
+    
+    stopAnimate() {
+      console.log('stop animate');
+      cancelAnimationFrame(this.animator);
+      this.animator = undefined;
+      this.onSpheres.forEach(sphere => sphere.material.opacity = 1);
+      this.renderer.render(this.scene, this.camera);
+    },
+    
+    updatePlaybackMode() {
+      if (this.checked === 'fixed') {
+        if (this.interval) {
+          clearInterval(this.interval);
+          this.interval = undefined;
+          this.onSpheres.forEach(sphere => sphere.gainNode.gain.cancelScheduledValues(this.ac.currentTime));
+        }
+        this.stopAnimate();
+        this.onSpheres.forEach(sphere => {
+          sphere.gainNode.gain.setValueAtTime(sphere.gainNode.gain.value, this.ac.currentTime);
+          sphere.gainNode.gain.linearRampToValueAtTime(this.maxGain, this.ac.currentTime + this.slewTime);
+        })
+      } else if (this.checked === 'off') {
+        if (this.interval) {
+          clearInterval(this.interval);
+          this.interval = undefined;
+          this.onSpheres.forEach(sphere => sphere.gainNode.gain.cancelScheduledValues(this.ac.currentTime));
+        }
+        this.stopAnimate();
+        this.onSpheres.forEach(sphere => {
+          sphere.gainNode.gain.setValueAtTime(sphere.gainNode.gain.value, this.ac.currentTime);
+          sphere.gainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
+        })
+      } else if (this.checked === 'drone') {
+        if (!this.interval) {
+          this.interval = setInterval(() => {
+            if (!this.animator) this.animate();
+            this.onSpheres.forEach(sphere => {
+              
+              if (!sphere.walkVal) sphere.walkVal = 1;
+              sphere.walkVal += 0.4 * (Math.random() * 2 - 1);
+              if (sphere.walkVal > 1) sphere.walkVal = 1;
+              if (sphere.walkVal < 0) sphere.walkVal = 0;
+              sphere.gainNode.gain.setTargetAtTime(sphere.walkVal * this.maxGain, this.ac.currentTime, 1);
+            })
+          }, 1000)
+        }  
+      }
+    },
+    
+    updateWindowSize() {
+      console.log('updating window size');
+      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.render();
+    },
+    
     getCenter() {
       let x = this.spheres.map(sphere => sphere.position.x);
       let y = this.spheres.map(sphere => sphere.position.y);
       let z = this.spheres.map(sphere => sphere.position.z);
-      console.log(x, y, z);
       x = (Math.max(...x) + Math.min(...x)) / 2;
       y = (Math.max(...y) + Math.min(...y)) / 2;
       z = (Math.max(...z) + Math.min(...z)) / 2;
       
-      console.log([x, y, z])
       return [x, y, z]
     },
     
@@ -118,7 +238,7 @@ export default {
       this.getConnections(points)
     },
     
-    getConnections(points) {
+    getConnections(points, layer = undefined) {
       let combinations = points.flatMap(
         (v, i) => points.slice(i + 1).map(w => [v, w])
       );
@@ -127,7 +247,7 @@ export default {
         return dist.length === 1 && Math.abs(dist[0]) === 1
       });
       combinations.forEach(comb => {
-        this.addConnection(...comb)
+        this.addConnection(...comb, layer)
       })
     },
     
@@ -151,14 +271,14 @@ export default {
       obj.gainNode = this.ac.createGain();
       obj.osc.frequency.setValueAtTime(freq, this.ac.currentTime);
       obj.gainNode.gain.setValueAtTime(0, this.ac.currentTime);
-      obj.gainNode.gain.linearRampToValueAtTime(1, this.ac.currentTime + this.slewTime);
+      obj.gainNode.gain.linearRampToValueAtTime(this.maxGain, this.ac.currentTime + this.slewTime);
       obj.osc.connect(obj.gainNode);
       obj.gainNode.connect(this.masterGain);
       obj.osc.start();
     },
     
     stopNote(obj) {
-      obj.gainNode.gain.setValueAtTime(1, this.ac.currentTime);
+      obj.gainNode.gain.setValueAtTime(this.maxGain, this.ac.currentTime);
       obj.gainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
       obj.osc.stop(this.ac.currentTime + this.slewTime);
       obj.osc = undefined;
@@ -184,7 +304,8 @@ export default {
       this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
       this.mouse.y = (1 - e.clientY / window.innerHeight) * 2 - 1;
       this.raycaster.setFromCamera(this.mouse, this.camera);
-      const intersects = this.raycaster.intersectObjects(this.spheres);
+      const testSet = this.displays.possibilities.checked ? this.spheres: this.onSpheres;
+      const intersects = this.raycaster.intersectObjects(testSet);
       if (intersects[0]) {
         this.hoverOverSphere(intersects[0].object);
       } else {
@@ -205,11 +326,15 @@ export default {
           this.turnSphereOn();
         } 
       }
-      // console.log(this.spheres);
     },
+    
     
     turnSphereOn() {
       this.onSpheres.push(this.currentObj);
+      this.currentObj.layers.set(1);
+      // const prevMaxGain = this.maxGain;
+      this.maxGain = 1 / (this.onSpheres.length + 1);
+      this.updatePlaybackMode();
       this.showNeighbors(this.currentObj);
       
       this.currentObj.material.color.setHex(this.sphereOnColor);
@@ -221,6 +346,7 @@ export default {
     turnSphereOff() {
       this.onSpheres.splice(this.onSpheres.indexOf(this.currentObj), 1);
       this.currentObj.material.color.setHex(this.hoverColor);
+      this.currentObj.layers.set(0);
       const remains = this.onSpheres.filter(sphere => {
         return nestedInclude(this.currentObj.neighborPositions, this.getPosition(sphere))
       });
@@ -232,10 +358,11 @@ export default {
       neighbs.forEach(sphere => this.scene.remove(sphere));
       this.spheres = this.spheres.filter(sphere => sphere === this.currentObj || !neighbs.includes(sphere));
       if (this.spheres.includes(this.currentObj) && ! nestedInclude(onSphereNeighbs, this.getPosition(this.currentObj))) {
-        this.scene.remove(this.currentObj);
-        this.spheres.splice(this.onSpheres.indexOf(this.currentObj), 1);
+        if (this.spheres.length > 1) {
+          this.scene.remove(this.currentObj);
+          this.spheres.splice(this.onSpheres.indexOf(this.currentObj), 1)
+        }
       }
-      // this.renderer.render(this.scene, this.camera);
       this.render();
     },
     
@@ -249,7 +376,8 @@ export default {
       this.camera.move
       const removes = this.scene.children.filter(child => child.geometry && child.geometry.type === 'CylinderGeometry');
       removes.forEach(child => this.scene.remove(child));
-      this.getConnections(this.spheres.map(sphere => this.getPosition(sphere)));
+      this.getConnections(this.spheres.map(sphere => this.getPosition(sphere)), 2);
+      this.getConnections(this.onSpheres.map(sphere => this.getPosition(sphere)), 3);
       this.renderer.render(this.scene, this.camera);
     },
     
@@ -265,22 +393,22 @@ export default {
       
       const newNeighborPositions = neighborPositions.filter(pos => ! nestedInclude(onSpherePositions, pos));
       this.drawPoints(newNeighborPositions);
-      this.render();
       obj.neighborPositions = neighborPositions;
       },
 
     addSphere(x, y, z) {
       const geometry = new THREE.SphereGeometry(0.15, 32, 32);
-      const material = new THREE.MeshPhongMaterial( {color: this.sphereColor} );
+      const material = new THREE.MeshPhongMaterial( {color: this.sphereColor, transparent: true} );
       const sphere = new THREE.Mesh( geometry, material );
-      sphere.position.x = x
-      sphere.position.y = y
-      sphere.position.z = z
+      sphere.position.x = x;
+      sphere.position.y = y;
+      sphere.position.z = z;
+      sphere.layers.set(0);
       this.scene.add( sphere );
       this.spheres.push(sphere);
     },
 
-    addConnection(a, b) {
+    addConnection(a, b, layer=undefined) {
       var geometry = new THREE.CylinderGeometry( 0.01, 0.01, 1, 32);
       var material = new THREE.MeshPhongMaterial( {color: 0x3461eb});
       const cylinder = new THREE.Mesh( geometry, material );
@@ -293,6 +421,7 @@ export default {
       } else if (axis == 2) {
         cylinder.rotateX(Math.PI / 2)
       }
+      if (layer) cylinder.layers.set(layer)
       this.scene.add(cylinder);
     },
     
@@ -301,7 +430,6 @@ export default {
       const geoX = new THREE.CylinderGeometry( 0.01, 0.01, 2 * x, 32);
       const geoY = new THREE.CylinderGeometry( 0.01, 0.01, 2 * y, 32);
       const geoZ = new THREE.CylinderGeometry( 0.01, 0.01, 2 * z, 32);
-      // const geoZ = new THREE.CylinderGeometry( 0.03, 0.03, z + 1, 32);
       const material = new THREE.MeshPhongMaterial( {
         color: this.gridColor,
         transparent: true,
@@ -353,5 +481,41 @@ export default {
 body {
   margin: 0
 }
+
+#controls {
+  z-index: 1;
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 200px;
+  height: 500px;
+  margin-top: 5px;
+  margin-bottom: 5px;
+  float: right;
+  
+  display: flex;
+  flex-direction: column;
+  align-content: flex-start;
+  /* justify-content: center; */
+  
+  /* border: 1px solid blue; */
+}
+
+label {
+  color: white;
+}
+
+#controls > label {
+  font-size: 20px;
+  margin-bottom: 10px;
+  margin-top: 10px;
+}
+
+.subControl {
+  text-align: left;
+}
+ .subControl > label {
+   padding-left: 5px;
+ }
 
 </style>

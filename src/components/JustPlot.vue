@@ -262,10 +262,10 @@ export default {
     
     startNote(obj) {
       const pos = [obj.position.x, obj.position.y, obj.position.z];
-      const primes = [3, 5, 7];
+      const primes = [3, 2, 5];
       let freq = this.fund * pos.map((p, i) => primes[i]**p).reduce((a, b) => a * b, 1);
-      while (freq > 400) freq /= 2;
-      while (freq < 200) freq *= 2;
+      // while (freq > 400) freq /= 2;
+      // while (freq < 200) freq *= 2;
       obj.osc = this.ac.createOscillator();
       obj.osc.type = 'triangle';
       obj.gainNode = this.ac.createGain();

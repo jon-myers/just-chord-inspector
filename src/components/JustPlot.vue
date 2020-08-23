@@ -1,6 +1,6 @@
 <template>
-  <div class="hello" @mousemove='mouseMove' @click='click'>
-    <canvas ref='canvas'></canvas>
+  <div class="hello">
+    <canvas ref='canvas' @mousemove='mouseMove' @click='click'></canvas>
     <div id='controls'>
       <label>Playback Mode</label>
       <div class='subControl' v-for="mode in playbackModes" :key='mode.id'>
@@ -20,6 +20,26 @@
       <div class='subControl' v-for="display in displays" :key='display.id'>
         <input type='checkbox' v-model='display.checked' @change='updateDisplay'>
         <label>{{display.id}}</label>
+      </div>
+      
+      <label>Dimensions</label>
+      <div class='dims'>
+        <div v-for='(dim, i) in dims' :key='i'>
+          <label>{{dim.axis}}</label>
+          <select v-model='dim.value' @change='updateDim'>
+            <option v-for='prime in primes' :value='prime' :key='prime'>{{prime}}</option>
+          </select>
+        </div>
+      </div>
+      
+      <label>Octave Shift</label>
+      <div class='dims'>
+        <div v-for='(dim, i) in dims' :key='i'>
+          <label>{{dim.axis}}</label>
+          <select v-model='dim.oct' @change='updateDim'>
+            <option v-for='oct in octave' :value='oct' :key='oct'>{{oct}}</option>
+          </select>
+        </div>
       </div>
       
     </div>
@@ -55,12 +75,36 @@ export default {
       sphereOnColor: 0xae58e0,
       spheres: [],
       currentObj: undefined,
-      fund: 100,
-      slewTime: 0.1,
+      fund: 120,
+      slewTime: 0.01,
       onSpheres: [],
       oldCenter: [0, 0, 0],
       checked: 'fixed',
       maxGain: 1,
+      
+      
+      primes: [2, 3, 5, 7, 11, 13, 17, 19],
+      octave: [0, -1, -2, -3, -4, -5],
+      dims: {
+        dim1: {
+          value: '3',
+          name: 'dim1',
+          axis: 'X',
+          oct: -1
+        },
+        dim2: {
+          value: '5',
+          name: 'dim2',
+          axis: 'Y',
+          oct: -2,
+        },
+        dim3: {
+          value: '7',
+          name: 'dim3',
+          axis: 'Z',
+          oct: -2,
+        },
+      },
       
       playbackModes: {
         fixed: {
@@ -113,6 +157,9 @@ export default {
     var light = new THREE.HemisphereLight( 0xffffbb, 0x080820, 1 );
     this.scene.add( light );
     
+    var axesHelper = new THREE.AxesHelper( 5 );
+    this.scene.add( axesHelper );
+    
     // enable all layers
     this.camera.layers.enable(0);
     this.camera.layers.enable(1);
@@ -136,6 +183,12 @@ export default {
   },
 
   methods: {
+    
+    updateDim() {
+      this.spheres.forEach(sphere => {
+        if (sphere.osc) this.setFreq(sphere)
+      })
+    },
     
     updateDisplay() {
       this.camera.layers.disableAll();
@@ -260,20 +313,37 @@ export default {
       this.masterGain.connect(this.ac.destination);
     },
     
-    startNote(obj) {
+    setFreq(obj, init=false) {
       const pos = [obj.position.x, obj.position.y, obj.position.z];
-      const primes = [3, 2, 5];
-      let freq = this.fund * pos.map((p, i) => primes[i]**p).reduce((a, b) => a * b, 1);
+      const primes = Object.keys(this.dims).map(key => Number(this.dims[key].value));
+      const octaves = Object.keys(this.dims).map(key => Number(this.dims[key].oct));
+      // const adjustedFund = this.fund / 2 ** octaves.reduce((a, b) => a + b, 0);
+      let freq = this.fund * pos.map((p, i) => primes[i]**p * 2**(p * octaves[i])).reduce((a, b) => a * b, 1);
       // while (freq > 400) freq /= 2;
       // while (freq < 200) freq *= 2;
+      if (init) {
+        obj.osc.frequency.setValueAtTime(freq, this.ac.currentTime)
+      } else {
+        obj.osc.frequency.setValueAtTime(obj.osc.frequency.value, this.ac.currentTime);
+        obj.osc.frequency.exponentialRampToValueAtTime(freq, this.ac.currentTime + this.slewTime)
+      }
+    },
+    
+    startNote(obj) {
+      // create audio nodes
       obj.osc = this.ac.createOscillator();
-      obj.osc.type = 'triangle';
       obj.gainNode = this.ac.createGain();
-      obj.osc.frequency.setValueAtTime(freq, this.ac.currentTime);
-      obj.gainNode.gain.setValueAtTime(0, this.ac.currentTime);
-      obj.gainNode.gain.linearRampToValueAtTime(this.maxGain, this.ac.currentTime + this.slewTime);
+      
+      // connect audio nodes
       obj.osc.connect(obj.gainNode);
       obj.gainNode.connect(this.masterGain);
+      
+      //
+      obj.osc.type = 'triangle';
+      this.setFreq(obj, true);
+      obj.gainNode.gain.setValueAtTime(0, this.ac.currentTime);
+      obj.gainNode.gain.linearRampToValueAtTime(this.maxGain, this.ac.currentTime + this.slewTime);
+      
       obj.osc.start();
     },
     
@@ -507,8 +577,8 @@ label {
 
 #controls > label {
   font-size: 20px;
-  margin-bottom: 10px;
-  margin-top: 10px;
+  margin-bottom: 5px;
+  margin-top: 20px;
 }
 
 .subControl {
@@ -516,6 +586,21 @@ label {
 }
  .subControl > label {
    padding-left: 5px;
+ }
+ 
+ .dims {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-around;
+ }
+ 
+ .dims > div {
+   display: flex;
+   flex-direction: column;
+ }
+ 
+ select {
+   width: 35px;
  }
 
 </style>

@@ -1,16 +1,20 @@
 <template>
   <div id="app">
-    <JustPlot/>
+    <JustPlot z-index='0'/>
+    <ChordSort z-index='1'/>
   </div>
 </template>
 
 <script>
-import JustPlot from './components/JustPlot.vue'
+// import JustPlot from './components/JustPlot.vue'
+import ChordSort from './components/ChordSort.vue';
+import JustPlot from './components/JustPlot.vue';
 
 export default {
   name: 'App',
   components: {
-    JustPlot
+    ChordSort,
+    JustPlot 
   }
 }
 </script>
@@ -25,6 +29,9 @@ export default {
 }
 
 body {
-  margin: 0
+  margin: 0;
+  background-color: blue;
 }
+
+
 </style>

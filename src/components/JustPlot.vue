@@ -1,6 +1,6 @@
 <template>
   <div class="hello">
-    <canvas ref='canvas' @mousemove='mouseMove' @click='click'></canvas>
+    <canvas ref='canvas'></canvas>
     <div id='controls'>
       <label>Playback Mode</label>
       <div class='subControl' v-for="mode in playbackModes" :key='mode.id'>
@@ -42,11 +42,43 @@
         </div>
       </div>
       
+      <label>Rotations</label>
+      <div class='rotations'>
+        <div v-for='(rot, i) in rotations' :key='i'>
+          <input 
+            type='radio' 
+            :value='i' 
+            :checked='rot' 
+            v-model='checkedRotation' 
+            @change='newChord(points)'
+          >
+        </div>
+      </div>  
+      
+      <label>Fundamental</label>
+      <div class='fundamental'>
+        <input 
+          type='range' 
+          min='0' 
+          :max='fundOctaves' 
+          step='0.001' 
+          v-model='fundSliderVal' 
+          @input='updateFund'
+        >   
+        <label>{{(fundMin * (2 ** fundSliderVal)).toFixed(0)}}</label>
+        
+      </div>  
     </div>
   </div>
 </template>
 
 <script>
+import chords5 from '../json/chords4.json';
+import chords4 from '../json/chords4.json';
+import chords3 from '../json/chords3.json';
+import chords2 from '../json/chords2.json';
+import chords1 from '../json/chords1.json';
+import EventBus from '../eventBus.js';
 const THREE = require('three');
 // const lodash = require('lodash');
 
@@ -62,29 +94,43 @@ function nestedInclude(arr, value) {
 
 const AudioContext = window.AudioContext || window.webkitAudioContext;
 
-const inclusiveRange = (start, end) => {
-  return [...Array((end+1) - start).keys()].map(i => i + start)
-}
+// const inclusiveRange = (start, end) => {
+//   return [...Array((end+1) - start).keys()].map(i => i + start)
+// }
 export default {
   name: 'JustPlot',
   data() {
     return {
       gridColor: 0x6c6e73,
-      sphereColor: 0x3461eb,
+      sphereColor: 0x240f7a,
       hoverColor: 0x54a5eb,
-      sphereOnColor: 0xae58e0,
+      sphereOnColor: 0x240f7a,
       spheres: [],
       currentObj: undefined,
-      fund: 120,
+      fund: 100,
       slewTime: 0.01,
       onSpheres: [],
       oldCenter: [0, 0, 0],
       checked: 'fixed',
       maxGain: 1,
+      fundMin: 50,
+      fundOctaves: 6,
+      fundSliderVal: 1,
+      
+      chords: {
+        1: chords1,
+        2: chords2,
+        3: chords3,
+        4: chords4,
+        5: chords5
+      },
       
       
       primes: [2, 3, 5, 7, 11, 13, 17, 19],
       octave: [0, -1, -2, -3, -4, -5],
+      
+      checkedRotation: 0,
+      rotations: Array(6),
       dims: {
         dim1: {
           value: '3',
@@ -96,7 +142,7 @@ export default {
           value: '5',
           name: 'dim2',
           axis: 'Y',
-          oct: -2,
+          oct: -1,
         },
         dim3: {
           value: '7',
@@ -109,7 +155,7 @@ export default {
       playbackModes: {
         fixed: {
           id: 'fixed',
-          state: true,
+          state: false,
         },
         off: {
           id: 'off',
@@ -117,7 +163,7 @@ export default {
         },
         drone: {
           id: 'drone',
-          state: false,
+          state: true,
         }
       },
       
@@ -149,16 +195,10 @@ export default {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     window.addEventListener('resize', this.updateWindowSize);
     
-    const points = [];
-    points.push([0, 0, 0])
-    
-    this.drawPoints(points);
+    // this.newChord(chords4, 1)
     
     var light = new THREE.HemisphereLight( 0xffffbb, 0x080820, 1 );
     this.scene.add( light );
-    
-    var axesHelper = new THREE.AxesHelper( 5 );
-    this.scene.add( axesHelper );
     
     // enable all layers
     this.camera.layers.enable(0);
@@ -174,15 +214,45 @@ export default {
     this.raycaster.layers.enable(0);
     this.raycaster.layers.enable(1);
     
+    this.initPosition = [2.5, 5 , 5];
+
+    this.camera.position.x = this.initPosition[0];
+    this.camera.position.y = this.initPosition[1];
+    this.camera.position.z = this.initPosition[2];
     
-    this.camera.position.z = 5;
-    this.camera.position.x = 3;
-    this.camera.position.y = 3
     this.camera.lookAt(0, 0, 0);    
     this.renderer.render(this.scene, this.camera);
+    
+    EventBus.$on('newChord', chord => {
+      this.newChord(chord)
+    });
+    
   },
 
   methods: {
+    
+    updateFund() {
+      
+      this.fund = this.fundMin * 2 ** this.fundSliderVal;
+      this.spheres.map(sphere => {
+        this.setFreq(sphere, false)
+      })
+    },
+    
+    newChord(points) {
+      this.points = points;
+      this.spheres.forEach(sphere => {
+        this.stopNote(sphere);
+        this.scene.remove(sphere)
+      });
+      this.onSpheres = [];
+      this.spheres = [];
+      const maps = [[0, 1, 2], [1, 0, 2], [0, 2, 1], [2, 0, 1], [1, 2, 0], [2, 1, 0]];
+      points = points.map(point => maps[this.checkedRotation].map(i => point[i]));
+      // console.log(points, trialPoints)
+      points.forEach(point => this.turnNewSphereOn(point));
+      this.render()
+    },
     
     updateDim() {
       this.spheres.forEach(sphere => {
@@ -216,7 +286,6 @@ export default {
     },
     
     stopAnimate() {
-      console.log('stop animate');
       cancelAnimationFrame(this.animator);
       this.animator = undefined;
       this.onSpheres.forEach(sphere => sphere.material.opacity = 1);
@@ -342,9 +411,9 @@ export default {
       obj.osc.type = 'triangle';
       this.setFreq(obj, true);
       obj.gainNode.gain.setValueAtTime(0, this.ac.currentTime);
-      obj.gainNode.gain.linearRampToValueAtTime(this.maxGain, this.ac.currentTime + this.slewTime);
+      obj.gainNode.gain.linearRampToValueAtTime(Math.random() * this.maxGain, this.ac.currentTime + this.slewTime);
       
-      obj.osc.start();
+      obj.osc.start(this.ac.currentTime);
     },
     
     stopNote(obj) {
@@ -398,6 +467,17 @@ export default {
       }
     },
     
+    turnNewSphereOn(point) {
+      const sphere = this.addSphere(...point);
+      this.startNote(sphere);
+      this.onSpheres.push(sphere);
+      sphere.layers.set(1);
+      this.maxGain = 1 / (this.onSpheres.length + 1);
+      this.updatePlaybackMode();
+      sphere.material.color.setHex(this.sphereOnColor);
+      this.render()
+    },
+    
     
     turnSphereOn() {
       this.onSpheres.push(this.currentObj);
@@ -438,9 +518,12 @@ export default {
     
     render() {
       const center = this.getCenter();
-      this.camera.translateX(center[0] - this.oldCenter[0]);
-      this.camera.translateY(center[1] - this.oldCenter[1]);
-      this.camera.translateZ(center[2] - this.oldCenter[2]);
+      this.camera.position.x = this.initPosition[0];
+      this.camera.position.y = this.initPosition[1];
+      this.camera.position.z = this.initPosition[2];
+      this.camera.translateX(center[0]);
+      this.camera.translateY(center[1]);
+      this.camera.translateZ(center[2]);
       this.camera.lookAt(...center);
       this.oldCenter = center;
       this.camera.move
@@ -454,21 +537,10 @@ export default {
     getPosition(obj) {
       return [obj.position.x, obj.position.y, obj.position.z]
     },
-    
-    showNeighbors(obj) {
-      const pos = this.getPosition(obj);
-      const nVec = [[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]];
-      const onSpherePositions = this.onSpheres.map(sphere => this.getPosition(sphere));
-      const neighborPositions = nVec.map(vec => [...Array(3).keys()].map(i => pos[i] + vec[i]));
-      
-      const newNeighborPositions = neighborPositions.filter(pos => ! nestedInclude(onSpherePositions, pos));
-      this.drawPoints(newNeighborPositions);
-      obj.neighborPositions = neighborPositions;
-      },
 
     addSphere(x, y, z) {
-      const geometry = new THREE.SphereGeometry(0.15, 32, 32);
-      const material = new THREE.MeshPhongMaterial( {color: this.sphereColor, transparent: true} );
+      const geometry = new THREE.SphereGeometry(0.15, 8, 8);
+      const material = new THREE.MeshPhongMaterial( {color: this.hoverColor, transparent: true} );
       const sphere = new THREE.Mesh( geometry, material );
       sphere.position.x = x;
       sphere.position.y = y;
@@ -476,10 +548,11 @@ export default {
       sphere.layers.set(0);
       this.scene.add( sphere );
       this.spheres.push(sphere);
+      return sphere
     },
 
     addConnection(a, b, layer=undefined) {
-      var geometry = new THREE.CylinderGeometry( 0.01, 0.01, 1, 32);
+      var geometry = new THREE.CylinderGeometry( 0.01, 0.01, 1, 4);
       var material = new THREE.MeshPhongMaterial( {color: 0x3461eb});
       const cylinder = new THREE.Mesh( geometry, material );
       cylinder.position.x = (a[0] + b[0]) / 2;
@@ -494,52 +567,6 @@ export default {
       if (layer) cylinder.layers.set(layer)
       this.scene.add(cylinder);
     },
-    
-    // centered at origin, distance from origin to edge, not edge to edge
-    addGrid(x, y, z) {
-      const geoX = new THREE.CylinderGeometry( 0.01, 0.01, 2 * x, 32);
-      const geoY = new THREE.CylinderGeometry( 0.01, 0.01, 2 * y, 32);
-      const geoZ = new THREE.CylinderGeometry( 0.01, 0.01, 2 * z, 32);
-      const material = new THREE.MeshPhongMaterial( {
-        color: this.gridColor,
-        transparent: true,
-        opacity: 0.4
-      })
-      
-      inclusiveRange(-x, x).forEach(x => {
-        inclusiveRange(-y, y).forEach(y => {
-          const cylinder = new THREE.Mesh(geoZ, material);
-          cylinder.position.x = x
-          cylinder.position.y = y
-          cylinder.position.z = 0
-          cylinder.rotateX(Math.PI / 2)
-          this.scene.add(cylinder);  
-        })
-      })
-      
-      inclusiveRange(-y, y).forEach(y => {
-        inclusiveRange(-z, z).forEach(z => {
-          const cylinder = new THREE.Mesh(geoX, material);
-          cylinder.position.x = 0
-          cylinder.position.y = y
-          cylinder.position.z = z
-          cylinder.rotateZ(Math.PI / 2)
-          this.scene.add(cylinder);  
-        })
-      })
-      
-      inclusiveRange(-z, z).forEach(z => {
-        inclusiveRange(-x, x).forEach(x => {
-          const cylinder = new THREE.Mesh(geoY, material);
-          cylinder.position.x = x
-          cylinder.position.y = 0
-          cylinder.position.z = z
-          this.scene.add(cylinder);  
-        })
-      })
-      
-      // var material = new THREE.MeshPhongMaterial( {color: 0x3461eb});
-    }
   }
 }
 </script>
@@ -600,7 +627,35 @@ label {
  }
  
  select {
-   width: 35px;
+   width: 45px;
  }
+ 
+ .rotations {
+   display: flex;
+   flex-direction: row;
+   justify-content: space-around;
+ }
+ 
+ .rotations > div {
+   width: 20px;
+ }
+ 
+ .fundamental {
+   background-color: black;
+ }
+ 
+ .fundamental > input {
+   background-color: black;
+ }
+ 
+ .fundamental > input::-moz-range-track {
+   background-color: SteelBlue;
+   /* color: black; */
+   /* height: 30px; */
+  }
+  
+  input:focus {
+    outline-width: 0
+  }
 
 </style>

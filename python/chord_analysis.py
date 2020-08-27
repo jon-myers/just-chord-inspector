@@ -1,0 +1,480 @@
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from sympy.utilities.iterables import multiset_permutations
+from gspread_formatting import *
+import numpy_indexed as npi
+import os, sys, shutil, pickle, copy, gspread, json, jsonpickle
+
+
+def cartesian_product(*arrays):
+    la = len(arrays)
+    dtype = np.result_type(*arrays)
+    arr = np.empty([len(a) for a in arrays] + [la], dtype=dtype)
+    for i, a in enumerate(np.ix_(*arrays)):
+        arr[...,i] = a
+    return arr.reshape(-1, la)
+    
+
+class MyEncoder(json.JSONEncoder):
+    def default(self, o):
+        return {k.lstrip('_'): v for k, v in vars(o).items()}
+
+class Dyad:
+
+
+    def __init__(self, origin = [0, 0, 0], vector = [1, 0, 0]):
+        self.origin = np.array(origin)
+        self.vector = np.array(vector)
+        self.terminal = self.origin + self.vector
+        self.t_connects = []
+        self.o_connects = []
+
+    def __str__(self):
+        return str('Dyad: ' + np.str(self.origin) + ' --> ' + np.str(self.terminal))
+
+    def rotate(self, rotation):
+        self.vector = np.int16(np.round(R.from_rotvec(rotation).apply(self.vector)))
+        self.terminal = self.origin + self.vector
+        return self
+
+    def get_id(self):
+        return str([self.origin, self.terminal])
+
+    id = property(get_id)
+
+def get_ranks(array):
+    temp = array.argsort()
+    ranks = np.empty_like(temp)
+    ranks[temp] = np.arange(len(array))
+    return ranks
+
+class Branch:
+    """A unidirectional collection of connected Diads—-no ambiguity in terms of containment"""
+    
+    def __init__(self, root, dyads, chord):
+        self.root = np.array(root)
+        self.dyads = dyads
+        self.chord = chord
+        self.grow_out()
+        
+    def grow_out(self):
+        layer = self.dyads
+        index = 0
+        while len(layer) > 0:
+            next_layer = []
+            for dyad in layer:
+                for next_dyad in dyad.t_connects:
+                    if np.all(next_dyad.origin == dyad.terminal) and next_dyad not in next_layer:
+                        next_layer.append(next_dyad)
+            self.dyads.extend(next_layer)
+            layer = next_layer            
+    
+    def overlap(self, other_branch):
+        """Measures the proportion of branch's dyads that are overlapped 
+        by dyads in this other_branch."""
+        
+        overlapping_dyads = [dyad for dyad in other_branch.dyads if dyad in self.dyads]
+        return len(overlapping_dyads) / len(self.dyads)
+        
+    def get_collective_overlap(self):
+        """Measures the proportion of branch's dyads that are overlapped by 
+        dyads in all other branches in chord."""
+        other_dyads = []
+        other_branches = [branch for branch in self.chord.branches if branch != self]
+        overlapping_dyads = [dyad for branch in other_branches for dyad in branch.dyads if dyad not in self.dyads]
+        return len(overlapping_dyads) / len(self.dyads)
+    
+    def get_origins(self):
+        return np.array([dyad.origin for dyad in self.dyads])
+    
+    def get_terminals(self):
+        return np.array([dyad.terminal for dyad in self.dyads])
+        
+    def get_proportion(self):
+        return round(len(self.dyads) / len(self.chord.dyads), 2)
+        
+    origins = property(get_origins)
+    terminals = property(get_terminals)
+    proportion = property(get_proportion)
+    collective_overlap = property(get_collective_overlap)
+    
+
+class Chord:
+
+
+    def __init__(self, dyads = [Dyad()]):
+        self.dyads = dyads
+        self.gen_index = None
+
+    def __str__(self):
+        dyads = len(self.dyads)
+        dims = str(self.dims)
+        containers = str(np.shape(self.containers)[0])
+        text = 'Chord: {} dyads, {} dimensions, {} roots.'
+        return text.format(dyads, dims, containers)
+
+    def print_dyads(self):
+        print('\n'.join([dyad.__str__() for dyad in self.dyads]) + '\n')
+
+    def normalize(self):
+        mins = np.min(self.origins, axis=0)
+        for dyad in self.dyads:
+            dyad.origin -= mins
+            dyad.terminal -= mins
+
+    def sort_dyads(self):
+        unsorted_origin_array = np.array([dyad.origin for dyad in self.dyads])
+        unsorted_terminal_array = np.array([dyad.terminal for dyad in self.dyads])
+        combined_ranks = np.lexsort((unsorted_origin_array, unsorted_terminal_array), axis = 0)
+
+        for index in range(3)[::-1]:
+            unsorted_origin_array = np.array([dyad.origin for dyad in self.dyads])
+            unsorted_terminal_array = np.array([dyad.terminal for dyad in self.dyads])
+            combined_ranks = np.lexsort((unsorted_origin_array, unsorted_terminal_array), axis = 0)
+
+            self.dyads = [self.dyads[i] for i in combined_ranks[:, index]]
+
+
+
+
+    def get_vecs(self):
+        return np.array([dyad.vector for dyad in self.dyads])
+
+    def get_dims(self):
+        return np.count_nonzero(np.any(self.vecs.T != 0, axis=1))
+
+    def get_roots(self):
+        containers = np.array([dyad.origin for dyad in self.dyads])
+        return np.unique(containers, axis=0)
+
+    def get_origins(self):
+        return np.array([dyad.origin for dyad in self.dyads])
+
+    def get_terminals(self):
+        return np.array([dyad.terminal for dyad in self.dyads])
+
+    def get_id(self):
+        return str(np.array([self.origins, self.terminals]))
+
+    def get_unique_points(self):
+        points = np.vstack((self.origins, self.terminals))
+        points = np.unique(points, axis=0)
+        return points
+
+    def get_position_pairs(self):
+        out = np.concatenate([self.origins, self.terminals], axis=1)
+        shape = np.shape(out)
+        return out.reshape((shape[0], 2, int(shape[1]/2)))
+        
+    def construct_branches(self):
+        self.branches = []
+        for root in np.unique(self.origins, axis=0):
+            dyads = [dyad for dyad in self.dyads if np.all(dyad.origin == root)]
+            branch = Branch(root, dyads, self)
+            self.branches.append(branch)
+            
+    def get_branch_nums(self):
+        return [len(branch.dyads) for branch in self.branches]
+
+    def fill_gaps(self):
+        """Determine if chord contains a missing connection, and adds appropriate
+        dyad"""
+        single_inds = np.arange(np.shape(self.unique_points)[0])
+        indexes = cartesian_product(single_inds, single_inds)
+        diffs = np.subtract(self.unique_points[indexes[:, 0]], self.unique_points[indexes[:, 1]])
+        proper_intervals = np.sum(np.abs(diffs), axis=1) == 1 # true if distance between points is 1
+        implied_dyads = self.unique_points[indexes[proper_intervals]] # all of the dyads implied by all the points in chord
+        implied_dyads = np.sort(implied_dyads, axis=1)
+        implied_dyads = np.unique(implied_dyads, axis=0)
+
+        for i_d in implied_dyads:
+            test = False
+            for dyad in self.dyads:
+                if np.all(dyad.origin == i_d[0]) and np.all(dyad.terminal == i_d[1]):
+                    test = True
+            if not test:
+                new_dyad = Dyad(origin = i_d[0], vector = i_d[1] - i_d[0])
+                self.connect_points(new_dyad)
+                new_dyad.index = len(self.dyads)
+                self.dyads.append(new_dyad)
+
+
+    def connect_points(self, trial_dyad):
+        for dyad in self.dyads:
+            if np.all(trial_dyad.origin == dyad.origin):
+                trial_dyad.o_connects.append(dyad)
+                dyad.o_connects.append(trial_dyad)
+            elif np.all(trial_dyad.origin == dyad.terminal):
+                trial_dyad.o_connects.append(dyad)
+                dyad.t_connects.append(trial_dyad)
+            elif np.all(trial_dyad.terminal == dyad.origin):
+                trial_dyad.t_connects.append(dyad)
+                dyad.o_connects.append(trial_dyad)
+            elif np.all(trial_dyad.terminal == dyad.terminal):
+                trial_dyad.t_connects.append(dyad)
+                dyad.t_connects.append(trial_dyad)
+
+    def get_containments(self):
+        return sum(self.branch_nums)
+    
+    def grow_layer(self):
+        layer = []
+        vectors = [Dyad().vector, Dyad().rotate([0, 0, np.pi / 2]).vector, Dyad().rotate([0, -np.pi / 2, 0]).vector]
+        for d, dyad in enumerate(self.dyads):
+            for vec in vectors:
+                if not np.all(vec == dyad.vector):
+                    layer.append(Dyad(origin = dyad.origin, vector = vec))
+                if str(vec) not in [str(list(d.vector)) for d in dyad.t_connects]:
+                    layer.append(Dyad(origin = dyad.terminal, vector = vec))
+                    layer.append(Dyad(origin = dyad.terminal - vec, vector = vec))
+                if str(vec) not in [str(list(d.vector)) for d in dyad.o_connects]:
+                    layer.append(Dyad(origin = dyad.origin - vec, vector = vec))
+        chords = []
+        for d, dyad in enumerate(layer):
+            if dyad.id  not in [i.id for i in self.dyads]:
+                chord = copy.deepcopy(self)
+                chord.connect_points(dyad)
+                dyad.index = len(chord.dyads)
+                chord.dyads.append(dyad)
+                chord.fill_gaps()
+                chord.sort_dyads()
+                chord.normalize()
+                chords.append(chord)
+        return chords
+
+    def np_multiset_permutations(self, array):
+        out = np.array([i for i in multiset_permutations([0, 1, 2])])
+        out = array[out]
+        return out
+
+    def get_rotations(self):
+        origins = np.apply_along_axis(self.np_multiset_permutations, 1, self.origins)
+        origins = np.transpose(origins, (1, 0, 2))
+        # print('origins: ', self.origins, '\n\n', origins)
+        terminals = np.apply_along_axis(self.np_multiset_permutations, 1, self.terminals)
+        terminals = np.transpose(terminals, (1, 0, 2))
+        out = np.concatenate([origins, terminals], axis=2)
+        shape = np.shape(out)
+        out = out.reshape((shape[0], shape[1], 2, int(shape[2]/2)))
+        return out
+    
+    def get_distinct_roots(self):
+        distinct_roots = []
+        for dyad in self.dyads:
+            if len(dyad.o_connects) > 0:
+                if not False in [np.all(dy.origin == dyad.origin) for dy in dyad.o_connects]:
+                    if list(dyad.origin) not in distinct_roots:
+                        distinct_roots.append(list(dyad.origin))        
+            elif list(dyad.origin) not in distinct_roots:
+                    distinct_roots.append(list(dyad.origin)) 
+        return distinct_roots
+    
+    def get_symmetries(self):
+        print(np.unique())
+
+    vecs = property(get_vecs)
+    origins = property(get_origins)
+    terminals = property(get_terminals)
+    dims = property(get_dims)
+    containers = property(get_roots)
+    id = property(get_id)
+    unique_points = property(get_unique_points)
+    position_pairs = property(get_position_pairs)
+    branch_nums = property(get_branch_nums)
+    containments = property(get_containments)
+    distinct_roots = property(get_distinct_roots)
+    symmetries = property(get_symmetries)
+    
+    
+    # chord.dims, len(chord.branches), chord.branch_num_id
+    def get_dict(self):
+        this_dict = {}
+        this_dict['points'] = list([[int(k) for k in list(i)] for i in self.unique_points])
+        this_dict['containments'] = int(self.containments)
+        this_dict['dims'] = int(self.dims)
+        this_dict['numOfBranches'] = len(self.branches)
+        this_dict['branchNums'] = [int(i) for i in self.branch_nums]
+        this_dict['distinct_roots'] = int(len(self.distinct_roots))
+        this_dict['gen_index'] = self.gen_index
+        return this_dict
+        
+        
+
+
+
+# @profile
+def remove_duplicates(chords, again=False):
+    """Gets rid of any chords that are exact duplicates or inverted duplicates"""
+    perm_inputs = []
+    ids = [chord.id for chord in chords]
+    duplicates = [True if id in ids[:i] else False for i, id in enumerate(ids)]
+    chords = [chord for i, chord in enumerate(chords) if not duplicates[i]]
+    removes = []
+    # print(len(chords))
+    for chord_index, chord in enumerate(chords):
+        rotations = chord.get_rotations()[1:]
+        # rotations = chord.get_rotations()
+
+        other_chords = np.array([i.position_pairs for i in chords])
+        # # print(npi.intersection())
+        # for oc in other_chords:
+        #     for rot in rotations:
+        # 
+        #     print(print('rotations\n', rotations[0], '\n\oc\n', oc, '\n\n\n'))
+        
+        compare_indexes = cartesian_product(np.arange(len(rotations)), np.arange(len(other_chords)))
+        equality_array = np.zeros(np.shape(compare_indexes)[0], dtype=bool)
+        print(chord_index, len(chords), len(equality_array), end='\r', flush=True)
+        for i, ci in enumerate(compare_indexes):
+            perm_input_len = np.shape(rotations[ci[0]])[0]
+            intersection = npi.intersection(rotations[ci[0]], other_chords[ci[1]])    
+            if len(intersection) == len(rotations[ci[0]]):
+                equality_array[i] = True 
+            
+            # if chord_index == 4 and ci[0] == 1 and ci[1] == 2:
+            #     print('i: \n', intersection, '\n\n\n')   
+        
+            
+            # if len(intersection) > 1:
+            #     print('starting: \n', rotations[ci[0]], '\n\n', other_chords[ci[1]], '\n\n', len(intersection), '\n\n\n')
+            # 
+            
+            
+            # if str(perm_input_len) not in list(all_multiset_perms.keys()):
+            #     perm_input = np.arange(perm_input_len)
+            #     permutations = np.empty((np.math.factorial(len(perm_input)), len(perm_input)), dtype=int)
+            #     for i_, el in enumerate(multiset_permutations(perm_input)): 
+            #         permutations[i_] = el 
+            # 
+            #     all_multiset_perms[str(perm_input_len)] = permutations
+            # permutations = all_multiset_perms[str(perm_input_len)]
+            # hyper_rotations = rotations[ci[0]][permutations]
+            # # print('r: ', rotations, '\n\nhr: ', hyper_rotations, '\n\n')
+            # 
+            # # THIS NEEDS TO BE SPED UP via some sort of np equals            
+            # for hr in hyper_rotations:
+            #     if np.all(hr == other_chords[ci[1]]):
+            #         equality_array[i] = True
+                    
+                    
+        equal_indexes = compare_indexes[np.nonzero(equality_array)]  
+
+        if np.size(equal_indexes) > 0:
+            for ei in equal_indexes:
+                if chord_index != ei[1] and ei[1] > chord_index and  chord_index not in removes:
+                    removes.append(ei[1])
+                          
+    chords = [chord for i, chord in enumerate(chords) if i not in removes]
+    for i, chord in enumerate(chords): 
+        chords[i].gen_index = i
+    return chords
+    
+# @profile
+def generate_base_chords(layers):
+    chords = [Chord()]
+    for layer in range(layers):
+        next_layer = []
+        for chord in chords:
+            next_layer.extend(chord.grow_layer())
+        chords = next_layer
+        chords = remove_duplicates(chords)
+        # chords = remove_duplicates(chords, again=True)
+        next_layer = []
+    for chord in chords:
+        chord.construct_branches()
+    assign_branch_num_id(chords)
+    return chords
+
+
+
+def save_diagrams(chords, path, name='chord', num_of_points=3):
+    for i, chord in enumerate(chords):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        XYZlim = [0, num_of_points]
+        ax.set_xlim3d(XYZlim)
+        ax.set_ylim3d(XYZlim)
+        ax.set_zlim3d(XYZlim)
+        ax.axis('off')
+
+        ax.scatter(*chord.origins.T, color='blue')
+        ax.scatter(*chord.terminals.T, color='blue')
+        for dyad in chord.dyads:
+            ax.plot(*np.array([dyad.origin, dyad.terminal]).T, color='blue')
+        plt.savefig(path+'/'+ name + '_' + str(i)+'.png')
+        plt.close()
+
+def save_all_diagrams(chords, num_of_points):
+    try:
+        shutil.rmtree('figures')
+    except OSError as e:
+        print ("Error: %s - %s." % (e.filename, e.strerror))
+
+    os.mkdir('figures')
+    for c, chord in enumerate(chords):
+        b_path = 'figures/branches_' + str(c)
+        if not os.path.isdir(b_path):
+            os.mkdir(b_path)
+        save_diagrams(chord.branches, 'figures/branches_' + str(c), 'branch', num_of_points)
+    save_diagrams(chords, 'figures/', 'chord', num_of_points)
+    
+    
+def assign_branch_num_id(chords):
+    branch_nums = [str(chord.branch_nums) for chord in chords]
+    unique_branch_nums = list(set(branch_nums))
+    indexes = [[i for i, x in enumerate(branch_nums) if x == id] for id in unique_branch_nums]
+    for i, index_arr in enumerate(indexes):
+        for index in index_arr:
+            chords[index].branch_num_id = i
+
+def write_sheet(chords, layer):
+    gc = gspread.service_account(filename='keys/chord-analysis-5780b5bae94b.json')
+    sheets = gc.open("chord-analysis")
+    sheet = sheets.worksheet('layer_' + str(layer))
+    
+    titles = ['Points', 'Containments', 'Dimensions', 'Branches', 'Branch Sizes ID', 'Branch Size', 'Proportion', 'Overlap']
+    titles_fmt = cellFormat(textFormat = textFormat(bold=True, fontSize=14))
+    chord_fmt = cellFormat(backgroundColor=color(0.352, 0.768, 0.270))
+    branch_fmt = cellFormat(backgroundColor=color(0.560, 0.262, 0.098), textFormat=textFormat(foregroundColor=color(1, 1, 1)))
+    
+    batch = batch_updater(sheets)
+    batch.format_cell_range(sheet, '1', titles_fmt)
+    sheet.update('B1', [titles])
+    data = []
+    row_ct = 2
+    for c, chord in enumerate(chords):
+        chord_text = ', '.join(['('+','.join([str(list(dyad.origin)), str(list(dyad.terminal))])+')' for dyad in chord.dyads])
+        data_row = ['Chord ' + str(c), len(chord.unique_points), chord.containments, chord.dims, len(chord.branches), chord.branch_num_id, chord_text]
+        data.append(data_row)
+        batch.format_cell_range(sheet, 'A' + str(row_ct) + ':I' + str(row_ct), chord_fmt)
+        row_ct += 1
+        for branch in chord.branches:
+            dyad_text = ', '.join(['('+','.join([str(list(dyad.origin)), str(list(dyad.terminal))])+')' for dyad in branch.dyads])
+            data_row = ['', '', '', '', '', ''] + [len(branch.dyads), branch.proportion, branch.collective_overlap, dyad_text]
+            data.append(data_row)
+            batch.format_cell_range(sheet, 'G' + str(row_ct) + ':I' + str(row_ct), branch_fmt)
+            row_ct += 1
+    sheet.update('A' + str(2), data)
+    batch.execute()
+
+def save_json(chords):
+    with open('json/chords' + str(layer) + '.json', 'w') as outfile:    
+        out = [chord.get_dict() for chord in chords]
+        json.dump(out, outfile)
+
+all_multiset_perms = {}    
+# layer = 1
+# # 
+
+for layer in range(5, 6):
+    chords = generate_base_chords(layer-1)
+    pickle.dump(chords, open('pickles/save_' + str(layer)+'.p', 'wb'))
+    chords = pickle.load(open('pickles/save_' + str(layer)+'.p', 'rb'))
+    save_json(chords)
+    print(len(chords))
+
+
+# save_all_diagrams(chords, layer+1)
+# write_sheet(chords, layer)

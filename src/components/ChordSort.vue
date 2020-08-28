@@ -23,6 +23,9 @@
           <!-- </div> -->
         </div>
         
+        <!-- <img :src='DummyImage'/>  -->
+      
+        
         <!-- {{chord}} -->
       </div>
     </div>
@@ -35,9 +38,16 @@ import chords3 from '../json/chords3.json';
 import chords2 from '../json/chords2.json';
 import chords1 from '../json/chords1.json';
 import EventBus from '../eventBus.js';
+// import BaseIcon from './_base/BaseIcon.vue';
+// import DummyImage from '@/assets/svgs/chords1chord0.svg';
+
+
 
 export default {
   name: 'ChordSort',
+  components: {
+    
+  },
   data() {
     return {
       checkedChords: '1',
@@ -95,7 +105,12 @@ export default {
           name: 'distinct_roots',
           abbreviation: 'roots',
           index: 4
-        }
+        },
+        'symmetry': {
+          name: 'symmetry',
+          abbreviation: 'sym',
+          index: 5
+        },
       },
       showIcon: [true, false, false, false]
       
@@ -113,7 +128,6 @@ export default {
         } else {
           return b[statName] - a[statName]
         }
-        
       })
     }
   },
@@ -247,6 +261,10 @@ export default {
 
 label {
   color: white;
+}
+
+.box {
+  width: 70px;
 }
 
 

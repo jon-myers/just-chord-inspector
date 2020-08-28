@@ -10,11 +10,12 @@
 import ChordSort from './components/ChordSort.vue';
 import JustPlot from './components/JustPlot.vue';
 
+
 export default {
   name: 'App',
   components: {
     ChordSort,
-    JustPlot 
+    JustPlot,
   }
 }
 </script>

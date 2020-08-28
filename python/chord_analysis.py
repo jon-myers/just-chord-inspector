@@ -5,7 +5,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from sympy.utilities.iterables import multiset_permutations
 from gspread_formatting import *
 import numpy_indexed as npi
-import os, sys, shutil, pickle, copy, gspread, json, jsonpickle
+from os.path import dirname, abspath
+import os, sys, shutil, pickle, copy, gspread, json, jsonpickle, itertools
 
 
 def cartesian_product(*arrays):
@@ -95,11 +96,16 @@ class Branch:
     def get_proportion(self):
         return round(len(self.dyads) / len(self.chord.dyads), 2)
         
+    def get_unique_points(self):
+        points = np.vstack((self.origins, self.terminals))
+        points = np.unique(points, axis=0)
+        return points
+        
     origins = property(get_origins)
     terminals = property(get_terminals)
     proportion = property(get_proportion)
     collective_overlap = property(get_collective_overlap)
-    
+    unique_points = property(get_unique_points)
 
 class Chord:
 
@@ -271,8 +277,21 @@ class Chord:
                     distinct_roots.append(list(dyad.origin)) 
         return distinct_roots
     
-    def get_symmetries(self):
-        print(np.unique())
+    def get_symmetry(self):
+        rots = self.get_rotations()
+        compare_indexes = list(itertools.combinations(np.arange(len(rots)), 2))
+        ct=0
+        for ci in compare_indexes:
+            ints = len(npi.intersection(rots[ci[0]], rots[ci[1]]))
+            if ints == len(rots[0]):
+                ct += 1
+        if ct == 0:
+            return 0
+        elif ct == 3:
+            return 1
+        elif ct == 15: 
+            return 2
+
 
     vecs = property(get_vecs)
     origins = property(get_origins)
@@ -285,7 +304,7 @@ class Chord:
     branch_nums = property(get_branch_nums)
     containments = property(get_containments)
     distinct_roots = property(get_distinct_roots)
-    symmetries = property(get_symmetries)
+    symmetry = property(get_symmetry)
     
     
     # chord.dims, len(chord.branches), chord.branch_num_id
@@ -297,7 +316,10 @@ class Chord:
         this_dict['numOfBranches'] = len(self.branches)
         this_dict['branchNums'] = [int(i) for i in self.branch_nums]
         this_dict['distinct_roots'] = int(len(self.distinct_roots))
-        this_dict['gen_index'] = self.gen_index
+        if self.gen_index == None: 
+            self.gen_index = 0
+        this_dict['gen_index'] = self.gen_index 
+        this_dict['symmetry'] = self.symmetry
         return this_dict
         
         
@@ -312,17 +334,9 @@ def remove_duplicates(chords, again=False):
     duplicates = [True if id in ids[:i] else False for i, id in enumerate(ids)]
     chords = [chord for i, chord in enumerate(chords) if not duplicates[i]]
     removes = []
-    # print(len(chords))
     for chord_index, chord in enumerate(chords):
         rotations = chord.get_rotations()[1:]
-        # rotations = chord.get_rotations()
-
         other_chords = np.array([i.position_pairs for i in chords])
-        # # print(npi.intersection())
-        # for oc in other_chords:
-        #     for rot in rotations:
-        # 
-        #     print(print('rotations\n', rotations[0], '\n\oc\n', oc, '\n\n\n'))
         
         compare_indexes = cartesian_product(np.arange(len(rotations)), np.arange(len(other_chords)))
         equality_array = np.zeros(np.shape(compare_indexes)[0], dtype=bool)
@@ -389,36 +403,36 @@ def generate_base_chords(layers):
 
 
 
-def save_diagrams(chords, path, name='chord', num_of_points=3):
+def save_diagrams(chords, path, name='chord', layer=3):
     for i, chord in enumerate(chords):
-        fig = plt.figure()
+        fig = plt.figure(figsize=[2, 2])
         ax = fig.add_subplot(111, projection='3d')
-        XYZlim = [0, num_of_points]
-        ax.set_xlim3d(XYZlim)
-        ax.set_ylim3d(XYZlim)
-        ax.set_zlim3d(XYZlim)
+        # XYZlim = [0, np.max(chord.unique_points)]
+        # ax.set_xlim3d(XYZlim)
+        # ax.set_ylim3d(XYZlim)
+        # ax.set_zlim3d(XYZlim)
         ax.axis('off')
 
-        ax.scatter(*chord.origins.T, color='blue')
-        ax.scatter(*chord.terminals.T, color='blue')
+        ax.scatter(*chord.unique_points.T, color='lightsalmon', depthshade=False) 
         for dyad in chord.dyads:
-            ax.plot(*np.array([dyad.origin, dyad.terminal]).T, color='blue')
-        plt.savefig(path+'/'+ name + '_' + str(i)+'.png')
+            ax.plot(*np.array([dyad.origin, dyad.terminal]).T, color='lightsalmon')
+        plt.tight_layout()
+        plt.savefig(path + name + str(i)+'.svg', transparent=True)
         plt.close()
 
-def save_all_diagrams(chords, num_of_points):
+def save_all_diagrams(chords, layer):
     try:
-        shutil.rmtree('figures')
+        shutil.rmtree('src/assets/svgs/layer_'+str(layer))
     except OSError as e:
-        print ("Error: %s - %s." % (e.filename, e.strerror))
-
-    os.mkdir('figures')
+        pass
+    base_path = dirname(dirname(abspath(__file__)))
+    os.mkdir(base_path + '/src/assets/svgs/layer_' + str(layer))
     for c, chord in enumerate(chords):
-        b_path = 'figures/branches_' + str(c)
+        b_path = base_path + '/src/assets/svgs/layer_' + str(layer) + '/branches_' + str(c)
         if not os.path.isdir(b_path):
             os.mkdir(b_path)
-        save_diagrams(chord.branches, 'figures/branches_' + str(c), 'branch', num_of_points)
-    save_diagrams(chords, 'figures/', 'chord', num_of_points)
+        save_diagrams(chord.branches, base_path + '/src/assets/svgs/layer_' + str(layer) + '/branches_' + str(c), 'branch', layer)
+    save_diagrams(chords, base_path + '/src/assets/svgs/chords'+str(layer), 'chord', layer)
     
     
 def assign_branch_num_id(chords):
@@ -460,7 +474,7 @@ def write_sheet(chords, layer):
     batch.execute()
 
 def save_json(chords):
-    with open('json/chords' + str(layer) + '.json', 'w') as outfile:    
+    with open('src/json/chords' + str(layer) + '.json', 'w') as outfile:    
         out = [chord.get_dict() for chord in chords]
         json.dump(out, outfile)
 
@@ -470,10 +484,10 @@ all_multiset_perms = {}
 
 for layer in range(5, 6):
     chords = generate_base_chords(layer-1)
-    pickle.dump(chords, open('pickles/save_' + str(layer)+'.p', 'wb'))
-    chords = pickle.load(open('pickles/save_' + str(layer)+'.p', 'rb'))
+    pickle.dump(chords, open('python/pickles/save_' + str(layer)+'.p', 'wb'))
+    # chords = pickle.load(open('python/pickles/save_' + str(layer)+'.p', 'rb'))
     save_json(chords)
-    print(len(chords))
+    save_all_diagrams(chords, layer)
 
 
 # save_all_diagrams(chords, layer+1)

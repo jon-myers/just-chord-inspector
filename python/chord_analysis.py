@@ -9,7 +9,7 @@ from os.path import dirname, abspath
 from functools import reduce, lru_cache
 import multiprocessing as mp
 # from collections import counter
-import os, sys, shutil, pickle, copy, gspread, json, jsonpickle, itertools
+import os, sys, shutil, pickle, copy, gspread, json, jsonpickle, itertools, ray
 
 # @lru_cache
 def cartesian_product(*arrays):

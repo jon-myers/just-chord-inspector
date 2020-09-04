@@ -86,6 +86,7 @@
       </div>
       <div class='buttonBox'>
         <button v-if="multipleRoots" @click='swapRoot'>Swap Root</button> 
+        <button @click='resetAudio'>Reset</button>
       </div> 
     </div>
   </div>
@@ -142,6 +143,7 @@ export default {
       audition: 'mono', 
       monoGain: 1,
       ambiGain: 0,
+      chordOn: true,
       
       maxGain: 1,
       fundMin: 50,
@@ -284,12 +286,11 @@ export default {
       this.ambiDirectOut.connect(this.ac.destination);
     },
     
-    newChord() {
-
-      // When triggered by clicking on a chord from the sorting menu, or by 
-      // applying a new rotation, removes old chord and instantiates new chord
-      // (both audio and visuals). 
-
+    resetAudio() {
+      
+      // Turns off audio context and re initializes. Good to do this as nodes 
+      // seem to hang around in memory, eventually causing performance issues. 
+      
       this.spheres.forEach(sphere => {
         if (sphere.stopGainNode) this.stopNote(sphere);
         this.scene.remove(sphere)
@@ -297,6 +298,36 @@ export default {
       this.onSpheres = [];
       this.spheres = [];
       this.cylinders = [];
+      this.chordOn = false;
+      
+      this.ac.close().then(() => {
+        this.setUpAudio();
+      });
+      
+    },
+    
+    async newChord() {
+
+      // When triggered by clicking on a chord from the sorting menu, or by 
+      // applying a new rotation, removes old chord and instantiates new chord
+      // (both audio and visuals). 
+      // const now = this.ac.currentTime;
+      // for (;;) {
+      //   if (this.ac.currentTime >= now + this.slewTime + this.slewTime) {
+      //     this.ac.close();
+      //     break
+      //   }
+      // }
+      // await this.setUpAudio();
+      if (this.chordOn) {
+        this.spheres.forEach(sphere => {
+          if (sphere.stopGainNode) this.stopNote(sphere);
+          this.scene.remove(sphere)
+        });
+        this.onSpheres = [];
+        this.spheres = [];
+        this.cylinders = [];
+      }
       const points = this.points.map(this.rotate);
       const promises = points.map(this.turnNewSphereOn);
       const extraRotShell = this.rotationShell.filter(point => {
@@ -311,6 +342,7 @@ export default {
         this.render()
       })
       this.updatePlaybackMode()
+      this.chordOn = true;
     },
     
     startNote(obj) {
@@ -333,7 +365,7 @@ export default {
       obj.stopGainNode.connect(obj.monoEncode);
       obj.monoEncode.connect(this.foaRenderer.input);
       obj.stopGainNode.connect(this.masterGain);
-       
+      
       // set parameters
       obj.osc.type = 'triangle';
       this.setFreq(obj, true);
@@ -362,7 +394,18 @@ export default {
       obj.stopGainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
 
       obj.osc.stop(this.ac.currentTime + this.slewTime);
+      obj.osc.disconnect(obj.gainNode);
+      obj.gainNode.disconnect(obj.stopGainNode);
+      obj.stopGainNode.disconnect(obj.monoEncode);
+      obj.monoEncode.disconnect(this.foaRenderer.input);
+      obj.stopGainNode.disconnect(this.masterGain);
+      
+      
       obj.osc = undefined;
+      obj.gainNode = undefined;
+      obj.stopGainNode = undefined;
+      obj.monoEncode = undefined;
+      obj.stopGainNode = undefined;
     },
     
     setFreq(obj, init=false) {

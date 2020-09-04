@@ -36,6 +36,7 @@
 </div>
 </template>
 <script>
+// import chords6 from '../json/chords6.json';
 import chords5 from '../json/chords5.json';
 import chords4 from '../json/chords4.json';
 import chords3 from '../json/chords3.json';
@@ -140,6 +141,11 @@ export default {
           name: 'loops',
           abbreviation: 'loops',
           index: 9
+        },
+        'rotation_shell_size': {
+          name: 'rotation_shell_size',
+          abbreviation: 'shell',
+          index: 10
         }
       },
       showIcon: [true, false, false, false]

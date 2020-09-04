@@ -361,7 +361,7 @@ class Chord:
             if self.extremities > 0:
                 return self.extremities + self.loops
             else:
-                return self.loops + len(intersects) / (3 * self.loops)
+                return self.loops + len(unique) / (3 * self.loops)
         else: 
             return 1
     #@property    
@@ -438,6 +438,8 @@ class Chord:
         this_dict['paths'] = self.paths
         this_dict['loops'] = self.loops
         this_dict['rotation_shell'] = [[int(i) for i in j] for j in self.rotation_shell]
+        this_dict['rotation_shell_size'] = len(self.rotation_shell)
+        
         return this_dict
         
         
@@ -525,7 +527,6 @@ def generate_base_chords(layers):
             chord.construct_branches()
             chord.num = i
             chord.layer = layer + 1
-            chord.get_rotation_shell()
         save_json(chords, layer + 1)
         pickle.dump(chords, open('python/pickles/save_' + str(layer+1)+'.p', 'wb'))
         
@@ -610,7 +611,7 @@ def save_json(chords, layer):
         json.dump(out, outfile)
 
 all_multiset_perms = {}    
-layer = 5
+layer = 6
 if __name__ == "__main__":
     # import cProfile
     # pr = cProfile.Profile()

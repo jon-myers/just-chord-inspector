@@ -148,6 +148,7 @@ export default {
       fundOctaves: 6,
       fundSliderVal: 1,
       multipleRoots: false,
+      initPosition: [3.5, 6.5 , 6.5],
       
       chords: {
         0: chords0,
@@ -221,61 +222,11 @@ export default {
   mounted() {
     this.width = window.innerWidth - 450 - 200;
     this.setUpAudio();
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera( 75, this.width / window.innerHeight, 0.1, 1000 );
-    this.raycaster = new THREE.Raycaster();
-    this.mouse = new THREE.Vector2();
-    this.renderer = new THREE.WebGLRenderer({
-      canvas: this.$refs.canvas
-    });
-    this.renderer.setSize(this.width, window.innerHeight);
-    // this.renderer.setViewport(450, 0, window.innerWidth - 200 - 450, window.innerHeight)
-    window.addEventListener('resize', this.updateWindowSize);
-    
-    // this.newChord(chords4, 1)
-    
-    var light = new THREE.HemisphereLight( 0xffffbb, 0x080820, 1 );
-    this.scene.add( light );
-    
-    // enable all layers
-    this.camera.layers.enable(0);
-    this.camera.layers.enable(1);
-    this.camera.layers.enable(2);
-    this.camera.layers.enable(3);
-    
-    light.layers.enable(0);
-    light.layers.enable(1);
-    light.layers.enable(2);
-    light.layers.enable(3);
-    
-    this.raycaster.layers.enable(0);
-    this.raycaster.layers.enable(1);
-    
-    this.initPosition = [3.5, 6.5 , 6.5];
+    this.setUpVisuals();
 
-    this.camera.position.x = this.initPosition[0];
-    this.camera.position.y = this.initPosition[1];
-    this.camera.position.z = this.initPosition[2];
-    
-    // this.camera.lookAt(0, 0, 0);   
+    window.addEventListener('resize', this.updateWindowSize);
+
     this.updateDisplay(); 
-    // this.renderer.render(this.scene, this.camera);
-    
-    // EventBus.$on('newChord', chord => {
-    //   this.points = chord;
-    //   // this.newChord(chord)
-    // });
-    // 
-    // EventBus.$on('roots', roots => {
-    //   this.roots = roots;
-    //   this.multipleRoots = this.roots.length > 1
-    //   this.primaryRoot = this.roots[Math.floor(Math.random() * this.roots.length)];
-    //   this.newChord();
-    // })
-    // 
-    // EventBus.$on('rotationShell', points => {
-    //   this.rotationShell = points;
-    // })
     
     EventBus.$on('chordPacket', chordPacket => {
       this.points = chordPacket.newChord;
@@ -284,14 +235,176 @@ export default {
       this.multipleRoots = this.roots.length > 1
       this.primaryRoot = this.roots[Math.floor(Math.random() * this.roots.length)];
       this.newChord();
-      
     })
-    
   },
 
   methods: {
     
+    setUpVisuals() {
+      
+      // Set up THREE scene and camera, associate renderer with canvas element,
+      // add lighting, enable light to shine on all layers, set camera position  
+      
+      this.scene = new THREE.Scene();
+      this.camera = new THREE.PerspectiveCamera( 75, this.width / window.innerHeight, 0.1, 1000 );
+      this.mouse = new THREE.Vector2();
+      this.renderer = new THREE.WebGLRenderer({
+        canvas: this.$refs.canvas
+      });
+      this.renderer.setSize(this.width, window.innerHeight);
+      
+      var light = new THREE.HemisphereLight( 0xffffbb, 0x080820, 1 );
+      this.scene.add( light );
+      light.layers.enableAll();
+      this.camera.position.x = this.initPosition[0];
+      this.camera.position.y = this.initPosition[1];
+      this.camera.position.z = this.initPosition[2];
+    },
+    
+    // probably doesn't really need to be async
+    async setUpAudio() {
+      
+      // Initializes audio nodes, sets initial parameters, and makes connections.
+      
+      this.ac = new AudioContext();
+      await this.ac.audioWorklet.addModule(monoEncodeUrl);
+      this.masterGain = this.ac.createGain();
+      this.mgDirectOut = this.ac.createGain();
+      this.ambiDirectOut = this.ac.createGain();
+      this.foaRenderer = Omnitone.createFOARenderer(this.ac);
+      await this.foaRenderer.initialize()
+      
+      this.masterGain.gain.setValueAtTime(0.75, this.ac.currentTime);
+      this.mgDirectOut.gain.setValueAtTime(this.monoGain, this.ac.currentTime);
+      this.ambiDirectOut.gain.setValueAtTime(this.ambiGain, this.ac.currentTime);
+      
+      this.masterGain.connect(this.mgDirectOut);
+      this.foaRenderer.output.connect(this.ambiDirectOut);
+      this.mgDirectOut.connect(this.ac.destination);
+      this.ambiDirectOut.connect(this.ac.destination);
+    },
+    
+    newChord() {
+
+      // When triggered by clicking on a chord from the sorting menu, or by 
+      // applying a new rotation, removes old chord and instantiates new chord
+      // (both audio and visuals). 
+
+      this.spheres.forEach(sphere => {
+        if (sphere.stopGainNode) this.stopNote(sphere);
+        this.scene.remove(sphere)
+      });
+      this.onSpheres = [];
+      this.spheres = [];
+      this.cylinders = [];
+      const points = this.points.map(this.rotate);
+      const promises = points.map(this.turnNewSphereOn);
+      const extraRotShell = this.rotationShell.filter(point => {
+        return !nestedInclude(points, point)
+      });
+      
+      // Rotation shell will only be seen when the 'Rotation Shell' display 
+      // checkbox is selected. 
+      extraRotShell.forEach(point => this.addSphere(...point));
+      
+      Promise.all(promises).then(() => {
+        this.render()
+      })
+      this.updatePlaybackMode()
+    },
+    
+    startNote(obj) {
+      
+      // Sets up the oscillator associated with a given sphere object, creates
+      // gains and encodings, makes connections between nodes, and sets initial 
+      // parameters. 
+      
+      // instantiate audio nodes
+      obj.osc = this.ac.createOscillator();
+      obj.gainNode = this.ac.createGain();
+      obj.stopGainNode = this.ac.createGain();
+      obj.monoEncode = new AudioWorkletNode(this.ac, 'monoEncode', {numberOfOutputs: 1, outputChannelCount: [4]});
+      obj.monoEncode.azimuth = obj.monoEncode.parameters.get('azimuth');
+      obj.monoEncode.elevation = obj.monoEncode.parameters.get('elevation');
+            
+      // connect audio nodes
+      obj.osc.connect(obj.gainNode);
+      obj.gainNode.connect(obj.stopGainNode);
+      obj.stopGainNode.connect(obj.monoEncode);
+      obj.monoEncode.connect(this.foaRenderer.input);
+      obj.stopGainNode.connect(this.masterGain);
+       
+      // set parameters
+      obj.osc.type = 'triangle';
+      this.setFreq(obj, true);
+      obj.gainNode.gain.setValueAtTime(0, this.ac.currentTime);
+      const gainVal = this.checked == 'drone' ? Math.random() : 1; 
+      obj.gainNode.gain.linearRampToValueAtTime(gainVal * this.maxGain, this.ac.currentTime + this.slewTime);
+      obj.stopGainNode.gain.setValueAtTime(0, this.ac.currentTime);
+      obj.stopGainNode.gain.linearRampToValueAtTime(1, this.ac.currentTime + this.slewTime);
+      // randomize ambisonic position
+      const azimuth = (Math.random() * 2 - 1) * Math.PI;
+      const elevation = (Math.random() - 0.5) * Math.PI;
+      obj.monoEncode.azimuth.setValueAtTime(azimuth, this.ac.currentTime); 
+      obj.monoEncode.elevation.setValueAtTime(elevation, this.ac.currentTime);
+      
+      // start oscillator
+      obj.osc.start(this.ac.currentTime);
+    },
+    
+    stopNote(obj) {
+      
+      // Sets gain of oscillator associated with sphere object to zero, stops 
+      // the oscillator. I think this should be enough to let all the associated
+      // nodes get garbage collected, but not entirely sure. 
+      
+      obj.stopGainNode.gain.setValueAtTime(1, this.ac.currentTime);
+      obj.stopGainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
+
+      obj.osc.stop(this.ac.currentTime + this.slewTime);
+      obj.osc = undefined;
+    },
+    
+    setFreq(obj, init=false) {
+      
+      // Ascertains and sets frequency of oscillator associated with given 
+      // sphere object, based on its position and chord's fundamental frequency. 
+      
+      const pos = [obj.position.x, obj.position.y, obj.position.z];
+      const primes = Object.keys(this.dims).map(key => Number(this.dims[key].value));
+      const octaves = Object.keys(this.dims).map(key => Number(this.dims[key].oct));
+      let freq = this.fund * pos.map((p, i) => primes[i]**p * 2**(p * octaves[i])).reduce((a, b) => a * b, 1);
+      if (init) {
+        obj.osc.frequency.setValueAtTime(freq, this.ac.currentTime)
+      } else {
+        obj.osc.frequency.setValueAtTime(obj.osc.frequency.value, this.ac.currentTime);
+        obj.osc.frequency.exponentialRampToValueAtTime(freq, this.ac.currentTime + this.slewTime)
+      }
+    },
+    
+    turnNewSphereOn(point, index) {
+      
+      // Given cartesian coordinates, adds sphere to scene and starts audio 
+      // playback of associated oscillator. 
+      
+      const sphere = this.addSphere(...point);
+      this.startNote(sphere);
+      this.onSpheres.push(sphere);
+      sphere.layers.set(1);
+      this.maxGain = 1 / (this.onSpheres.length + 1);
+      let color = this.roots.includes(index) ? this.rootColor: this.sphereColor;
+      if (this.primaryRoot === index) color = this.primaryRootColor;
+      sphere.material.color.setHex(color);
+    },
+    
     updateAuditionMode() {
+      
+      // Allows for toggling between 'mono' and 'binaural' audition modes. 
+      // 'Mono' means all oscillators mix to one signal which routes direct to output.
+      // 'Binaural' means each oscillator is randomly assigned a spherical position
+      // and the total sound is rendered via ambisonics (OMNITONE plugin) to a 
+      // stereo signal, best appreciated via headphones. 
+      
       if (this.audition === 'mono') {
         this.monoGain = 1;
         this.ambiGain = 0;
@@ -303,15 +416,12 @@ export default {
       this.mgDirectOut.gain.setValueAtTime(this.mgDirectOut.gain.value, this.ac.currentTime);
       this.ambiDirectOut.gain.linearRampToValueAtTime(this.ambiGain, this.ac.currentTime + this.slewTime);
       this.mgDirectOut.gain.linearRampToValueAtTime(this.monoGain, this.ac.currentTime + this.slewTime);
-      
-    },
-    
-    swapRoot() {
-      this.primaryRoot = (this.primaryRoot + 1) % this.roots.length;
-      this.newChord();
     },
     
     updateFund() {
+      
+      // Adjusts frequencies of all oscillators in proportion to the (newly 
+      // adjusted?) fundamental frequency. 
       
       this.fund = this.fundMin * 2 ** this.fundSliderVal;
       this.spheres.map(sphere => {
@@ -319,7 +429,34 @@ export default {
       })
     },
     
+    swapRoot() {
+      
+      // In chords with multiple roots, assigns a new primary root, which will
+      // appear in a different color and will effect how the chord rotates: 
+      // rotations occur about the primary root. 
+      
+      this.primaryRoot = (this.primaryRoot + 1) % this.roots.length;
+      this.newChord();
+    },
+    
+    updateDim() {
+      
+      // Adjusts frequencies of all oscillators to align with any changes to the 
+      // prime or octave shift of a dimension. 
+      
+      this.spheres.forEach(sphere => {
+        if (sphere.osc) this.setFreq(sphere)
+      })
+    },
+    
     rotate(point) {
+      
+      // For a given point in cartesian coordinates, returns the coordinates of 
+      // the 'rotated' version of that point. Each 'rotation' represents a swap
+      // of axes. In 3D, for example, there are 6 different 'rotations' of a 
+      // given point. `this.checkedRotation` provides the index of the current 
+      // rotation.
+      
       const maps = [[0, 1, 2], [1, 0, 2], [0, 2, 1], [2, 0, 1], [1, 2, 0], [2, 1, 0]];
       const translatedPoint = point.map((pt, i) => pt - this.points[this.primaryRoot][i]);
       const rotatedTranslatedPoint = maps[this.checkedRotation].map(i => translatedPoint[i]);
@@ -327,34 +464,12 @@ export default {
       return rotatedPoint
     },
     
-    newChord() {
-      // this.points = points;
-      this.spheres.forEach(sphere => {
-        if (sphere.stopGainNode) this.stopNote(sphere);
-        this.scene.remove(sphere)
-      });
-      this.onSpheres = [];
-      this.spheres = [];
-      const points = this.points.map(this.rotate);
-      const promises = points.map(this.turnNewSphereOn);
-      const extraRotShell = this.rotationShell.filter(point => {
-        return !nestedInclude(points, point)
-      })
-    
-      extraRotShell.forEach(point => this.addSphere(...point))
-      
-      Promise.all(promises).then(() => {
-        this.render()
-      })
-    },
-    
-    updateDim() {
-      this.spheres.forEach(sphere => {
-        if (sphere.osc) this.setFreq(sphere)
-      })
-    },
-    
     updateDisplay() {
+      
+      // Enables or disables appropriate layers in order to show or hide rotation
+      // shell. Rotation shell spheres are in layer 1; rotation shell connections
+      // are in layer 3. 
+      
       this.camera.layers.disableAll();
       if (this.displays.rotationShell.checked) {
         this.camera.layers.enableAll();
@@ -362,16 +477,14 @@ export default {
         this.camera.layers.enable(1);
         this.camera.layers.enable(3);
       }
-      
-      // if (this.displays.possibilities.checked) {
-      //   this.camera.layers.enable(0);
-      //   if (this.displays.connections.checked) this.camera.layers.enable(2);
-      // }
       this.renderer.render(this.scene, this.camera);
-      
     },
     
     animate() {
+      
+      // When in 'drone' playback mode, ties opacity of each sphere object to 
+      // gain of that object. 
+      
       this.animator = requestAnimationFrame(this.animate);
       this.onSpheres.forEach(sphere => {
         sphere.material.opacity = sphere.gainNode.gain.value / this.maxGain
@@ -380,6 +493,9 @@ export default {
     },
     
     stopAnimate() {
+      
+      // Stops animation and returns all spheres to full opacity.
+      
       cancelAnimationFrame(this.animator);
       this.animator = undefined;
       this.onSpheres.forEach(sphere => sphere.material.opacity = 1);
@@ -387,6 +503,13 @@ export default {
     },
     
     updatePlaybackMode() {
+      
+      // Adjusts current playback mode to align with appropriate radio box: 
+      // 'fixed': Oscillators at full gain.
+      // 'off': Oscillators at zero gain.
+      // 'drone': Oscillators perform a random walk, starting at full gain.
+      
+      
       if (this.checked === 'fixed') {
         if (this.interval) {
           clearInterval(this.interval);
@@ -414,14 +537,8 @@ export default {
           this.interval = setInterval(() => {
             if (!this.animator) this.animate();
             this.onSpheres.forEach(sphere => {
-              
               this.randomWalk(sphere, 'walkVal', 1, 0, 1, 0.4);
-              // this.randomWalk(sphere, 'azimuth', 0, -Math.PI, Math.PI, Math.PI / 16)
-              // this.randomWalk(sphere, 'elevation', 0, -Math.PI/2, Math.PI/2, Math.PI/8 )
-              
               sphere.gainNode.gain.setTargetAtTime(sphere.walkVal * this.maxGain, this.ac.currentTime, 1);
-              // sphere.monoEncode.azimuth.setTargetAtTime(sphere.azimuth, this.ac.currentTime, 1);
-              // sphere.monoEncode.elevation.setTargetAtTime(sphere.elevation, this.ac.currentTime, 1);
             })
           }, 1000)
         }  
@@ -429,6 +546,11 @@ export default {
     },
     
     randomWalk(sphere, attribute, initVal, minVal, maxVal, maxStep) {
+      
+      // Iteratively adjusts the value of an attribute of a given sphere object, 
+      // starting at initVal, randomly progressing +/- less than the maxStep, 
+      // never ranging below the minVal or above the maxVal.
+      
       if (!sphere[attribute]) sphere[attribute] = initVal;
       sphere[attribute] += maxStep * (Math.random() * 2 - 1);
       if (sphere[attribute] > maxVal) attribute === 'azimuth' ? sphere[attribute] -= 2 * Math.PI : sphere[attribute] = maxVal;
@@ -436,6 +558,12 @@ export default {
     },
     
     updateWindowSize() {
+      
+      // THIS NEEDS TO BE FIXED AT SOME POINT; LOOSE NUMBERS NOT TIED TO ANY VARIABLES
+      
+      // Adjusts size and aspec ratio of canvas element / renderer according to 
+      // current window size, and size of panel components. 
+      
       this.width = window.innerWidth - 450 - 200;
       console.log('updating window size');
       this.camera.aspect = this.width / window.innerHeight;
@@ -444,27 +572,24 @@ export default {
       this.render();
     },
     
-    getCenter() {
-      let x = this.spheres.map(sphere => sphere.position.x);
-      let y = this.spheres.map(sphere => sphere.position.y);
-      let z = this.spheres.map(sphere => sphere.position.z);
-      x = (Math.max(...x) + Math.min(...x)) / 2;
-      y = (Math.max(...y) + Math.min(...y)) / 2;
-      z = (Math.max(...z) + Math.min(...z)) / 2;
-      
-      return [x, y, z]
-    },
-    
     drawPoints(points) {
+      
+      // Given the cartesian coordinates of a point, if not in `this.spheres`, 
+      // add new sphere and add cylindrical connections between all spheres. 
+      
       points.forEach(point => {
         if (! nestedInclude(this.spheres.map(sphere => this.getPosition(sphere)), point)) {
           this.addSphere(...point)
         }
       })
-      this.getConnections(points)
+      this.drawConnections(points)
     },
     
-    getConnections(points, layer = undefined) {
+    drawConnections(points, layer = undefined) {
+      
+      // Adds a cyllindrical connection between all sets of spheres in scene if 
+      // distance between spheres is exactly equal to 1. 
+      
       let combinations = points.flatMap(
         (v, i) => points.slice(i + 1).map(w => [v, w])
       );
@@ -477,217 +602,53 @@ export default {
       })
     },
     
-    async setUpAudio() {
-      this.ac = new AudioContext();
-      await this.ac.audioWorklet.addModule(monoEncodeUrl);
-      
-      this.masterGain = this.ac.createGain();
-      this.mgDirectOut = this.ac.createGain();
-      this.ambiDirectOut = this.ac.createGain();
-      // this.monoEncode = new AudioWorkletNode(this.ac, 'monoEncode', {numberOfOutputs: 1, outputChannelCount: [4]});
-      // this.monoEncode.azimuth = this.monoEncode.parameters.get('azimuth');
-      // this.monoEncode.elevation = this.monoEncode.parameters.get('elevation');
-      this.foaRenderer = Omnitone.createFOARenderer(this.ac);
-      await this.foaRenderer.initialize()
-      
-      
-      this.masterGain.gain.setValueAtTime(0.75, this.ac.currentTime);
-      this.mgDirectOut.gain.setValueAtTime(this.monoGain, this.ac.currentTime);
-      this.ambiDirectOut.gain.setValueAtTime(this.ambiGain, this.ac.currentTime);
-      
-      // this.monoEncode.start();
-      // this.masterGain.connect(this.ac.destination);
-      // this.masterGain.connect(this.monoEncode);
-      this.masterGain.connect(this.mgDirectOut);
-      // this.monoEncode.connect(this.foaRenderer.input);
-      this.foaRenderer.output.connect(this.ambiDirectOut);
-      this.mgDirectOut.connect(this.ac.destination);
-      this.ambiDirectOut.connect(this.ac.destination);
-      // this.monoEncode.start();
-      
-      // this.monoEncode.start();
-      
-      
-    },
-    
-    setFreq(obj, init=false) {
-      const pos = [obj.position.x, obj.position.y, obj.position.z];
-      const primes = Object.keys(this.dims).map(key => Number(this.dims[key].value));
-      const octaves = Object.keys(this.dims).map(key => Number(this.dims[key].oct));
-      // const adjustedFund = this.fund / 2 ** octaves.reduce((a, b) => a + b, 0);
-      let freq = this.fund * pos.map((p, i) => primes[i]**p * 2**(p * octaves[i])).reduce((a, b) => a * b, 1);
-      // while (freq > 400) freq /= 2;
-      // while (freq < 200) freq *= 2;
-      if (init) {
-        obj.osc.frequency.setValueAtTime(freq, this.ac.currentTime)
-      } else {
-        obj.osc.frequency.setValueAtTime(obj.osc.frequency.value, this.ac.currentTime);
-        obj.osc.frequency.exponentialRampToValueAtTime(freq, this.ac.currentTime + this.slewTime)
-      }
-    },
-    
-    startNote(obj) {
-      // create audio nodes
-      obj.osc = this.ac.createOscillator();
-      obj.gainNode = this.ac.createGain();
-      obj.stopGainNode = this.ac.createGain();
-      obj.monoEncode = new AudioWorkletNode(this.ac, 'monoEncode', {numberOfOutputs: 1, outputChannelCount: [4]});
-      obj.monoEncode.azimuth = obj.monoEncode.parameters.get('azimuth');
-      obj.monoEncode.elevation = obj.monoEncode.parameters.get('elevation');
-      const azimuth = (Math.random() * 2 - 1) * Math.PI;
-      const elevation = (Math.random() - 0.5) * Math.PI;
-      obj.monoEncode.azimuth.setValueAtTime(azimuth, this.ac.currentTime); 
-      obj.monoEncode.elevation.setValueAtTime(elevation, this.ac.currentTime);
-      // const splitter = this.ac.createChannelSplitter(4);
-      
-      // connect audio nodes
-      obj.osc.connect(obj.gainNode);
-      obj.gainNode.connect(obj.stopGainNode);
-      obj.stopGainNode.connect(obj.monoEncode);
-      obj.monoEncode.connect(this.foaRenderer.input);
-      
-      obj.stopGainNode.connect(this.masterGain);
-       
-      //
-      obj.osc.type = 'triangle';
-      this.setFreq(obj, true);
-      obj.gainNode.gain.setValueAtTime(0, this.ac.currentTime);
-      const gainVal = this.checked == 'drone' ? Math.random() : 1; 
-      obj.gainNode.gain.linearRampToValueAtTime(gainVal * this.maxGain, this.ac.currentTime + this.slewTime);
-      obj.stopGainNode.gain.setValueAtTime(0, this.ac.currentTime);
-      obj.stopGainNode.gain.linearRampToValueAtTime(1, this.slewTime);
-      
-      obj.osc.start(this.ac.currentTime);
-    },
-    
-    stopNote(obj) {
-      obj.stopGainNode.gain.setValueAtTime(1, this.ac.currentTime);
-      obj.stopGainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
-      // obj.gainNode.gain.setValueAtTime(obj.gainNode.gain.value, this.ac.currentTime);
-      // obj.gainNode.gain.linearRampToValueAtTime(0, this.ac.currentTime + this.slewTime);
-      obj.osc.stop(this.ac.currentTime + this.slewTime);
-      obj.osc = undefined;
-    },
-    
-    hoverOverSphere(obj) {
-      if (obj != this.currentObj) {
-        if (this.currentObj && ! this.onSpheres.includes(this.currentObj)) {
-          this.currentObj.material.color.setHex(this.sphereColor);
-          if (this.currentObj.osc) this.stopNote(this.currentObj);
-        }
-        this.currentObj = obj
-      }
-      if (this.ac.state === 'suspended') this.ac.resume();
-      if (!obj.osc) this.startNote(obj);
-      if (! this.onSpheres.includes(obj)) {
-        obj.material.color.setHex(this.hoverColor);
-        this.renderer.render(this.scene, this.camera);
-      }
-    },
-    
-    mouseMove(e) {
-      this.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-      this.mouse.y = (1 - e.clientY / window.innerHeight) * 2 - 1;
-      this.raycaster.setFromCamera(this.mouse, this.camera);
-      const testSet = this.displays.possibilities.checked ? this.spheres: this.onSpheres;
-      const intersects = this.raycaster.intersectObjects(testSet);
-      if (intersects[0]) {
-        this.hoverOverSphere(intersects[0].object);
-      } else {
-        if (this.currentObj && this.currentObj.material.color.getHex() === this.hoverColor && ! this.onSpheres.includes(this.currentObj)) {
-          this.currentObj.material.color.setHex(this.sphereColor);
-          this.stopNote(this.currentObj);
-          this.renderer.render(this.scene, this.camera);
-          this.currentObj = undefined;    
-        }
-      }
-    },
-    
-    click() {
-      if (this.currentObj) {
-        if (this.onSpheres.includes(this.currentObj)) {
-          this.turnSphereOff();
-        } else {
-          this.turnSphereOn();
-        } 
-      }
-    },
-    
-    turnNewSphereOn(point, index) {
-      const sphere = this.addSphere(...point);
-      this.startNote(sphere);
-      this.onSpheres.push(sphere);
-      sphere.layers.set(1);
-      this.maxGain = 1 / (this.onSpheres.length + 1);
-      this.updatePlaybackMode();
-      let color = this.roots.includes(index) ? this.rootColor: this.sphereColor;
-      if (this.primaryRoot === index) color = this.primaryRootColor;
-      sphere.material.color.setHex(color);
-      
-
-      
-      // .includes(point.toString()) ? this.rootColor : this.sphereColor; 
-      // Vue.nextTick().then(() => {
-      //   sphere.material.color.setHex(color);
-      //   this.render()
-      // })
-    },
-    
-    
-    turnSphereOn() {
-      this.onSpheres.push(this.currentObj);
-      this.currentObj.layers.set(1);
-      // const prevMaxGain = this.maxGain;
-      this.maxGain = 1 / (this.onSpheres.length + 1);
-      this.updatePlaybackMode();
-      this.showNeighbors(this.currentObj);
-      
-      this.currentObj.material.color.setHex(this.shellColor);
-      // this.renderer.render(this.scene, this.camera);
-      this.render();
-      this.currentObj = undefined;
-    },
-
-    
     render() {
-      console.log('start render');
+      
+      // Repositions camera, removes connections, calculates and redraws 
+      // connections, and renders scene.
+      
       const c = this.points ? (this.points.length) / 2: 0;
       const center = [c, c, c];
       this.camera.position.x = this.initPosition[0];
       this.camera.position.y = this.initPosition[1];
       this.camera.position.z = this.initPosition[2];
-      // this.camera.translateX(center[0]);
-      // this.camera.translateY(center[1]);
-      // this.camera.translateZ(center[2]);
       this.camera.lookAt(...center);
-      // this.oldCenter = center;
       const removes = this.scene.children.filter(child => child.geometry && child.geometry.type === 'CylinderGeometry');
       removes.forEach(child => this.scene.remove(child));
-      this.getConnections(this.spheres.map(sphere => this.getPosition(sphere)), 2);
-      this.getConnections(this.onSpheres.map(sphere => this.getPosition(sphere)), 3);
+      this.drawConnections(this.spheres.map(sphere => this.getPosition(sphere)), 2);
+      this.drawConnections(this.onSpheres.map(sphere => this.getPosition(sphere)), 3);
       this.$nextTick(() => {
         this.renderer.render(this.scene, this.camera)
       })
     },
     
     getPosition(obj) {
+      
+      // Returns cartesian coordinates of sphere object. 
+      
       return [obj.position.x, obj.position.y, obj.position.z]
     },
 
     addSphere(x, y, z) {
+      
+      // Adds sphere to scene at given cartesian coordinates. 
+      
       const geometry = new THREE.SphereGeometry(0.15, 8, 8);
       const material = new THREE.MeshPhongMaterial( {color: this.shellColor, transparent: true} );
-      const sphere = new THREE.Mesh( geometry, material );
+      const sphere = new THREE.Mesh(geometry, material);
       sphere.position.x = x;
       sphere.position.y = y;
       sphere.position.z = z;
       sphere.layers.set(0);
-      this.scene.add( sphere );
+      this.scene.add(sphere);
       this.spheres.push(sphere);
       return sphere
     },
 
     addConnection(a, b, layer=undefined) {
+      
+      // Adds cyllinder to scene between set of point coordinates.
+      
       var geometry = new THREE.CylinderGeometry( 0.02, 0.02, 1, 4);
       var material = new THREE.MeshPhongMaterial( {color: layer === 2 ? this.shellColor: this.sphereColor});
       const cylinder = new THREE.Mesh( geometry, material );
@@ -702,6 +663,7 @@ export default {
       }
       if (layer) cylinder.layers.set(layer)
       this.scene.add(cylinder);
+      this.cylinders.push(cylinder);
     },
   }
 }
@@ -709,7 +671,6 @@ export default {
 
 
 
-<!-- Add "scoped" attribute to limit CSS to this component only -->
 <style scoped>
 
 

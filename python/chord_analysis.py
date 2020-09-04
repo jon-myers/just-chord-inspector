@@ -11,7 +11,20 @@ import multiprocessing as mp
 # from collections import counter
 import os, sys, shutil, pickle, copy, gspread, json, jsonpickle, itertools, ray
 
-# @lru_cache
+
+def memoize(f):
+    """ Memoization decorator for functions taking one or more arguments. """
+    class memodict(dict):
+        def __init__(self, f):
+            self.f = f
+        def __call__(self, *args):
+            return self[args]
+        def __missing__(self, key):
+            ret = self[key] = self.f(*key)
+            return ret
+    return memodict(f)
+
+
 def cartesian_product(*arrays):
     la = len(arrays)
     dtype = np.result_type(*arrays)
@@ -102,6 +115,7 @@ class Branch:
     def get_unique_points(self):
         points = np.vstack((self.origins, self.terminals))
         points = np.unique(points, axis=0)
+        points = master_sort(points)
         return points
         
     origins = property(get_origins)
@@ -117,6 +131,7 @@ class Chord:
         self.dyads = dyads
         self.gen_index = None
         self.num = None
+        self.layer = None
 
     def __str__(self):
         dyads = len(self.dyads)
@@ -186,7 +201,8 @@ class Chord:
             self.branches.append(branch)
             
     def get_branch_nums(self):
-        return [len(branch.dyads) for branch in self.branches]
+        if hasattr(self, 'branches'):
+            return [len(branch.dyads) for branch in self.branches]
 
     def fill_gaps(self):
         """Determine if chord contains a missing connection, and adds appropriate
@@ -258,18 +274,15 @@ class Chord:
         out = np.array([i for i in multiset_permutations([0, 1, 2])])
         out = array[out]
         return out
-
+    
+    
+    
     #@property
     def get_rotations(self):
-        origins = np.apply_along_axis(self.np_multiset_permutations, 1, self.origins)
-        origins = np.transpose(origins, (1, 0, 2))
-        # print('origins: ', self.origins, '\n\n', origins)
-        terminals = np.apply_along_axis(self.np_multiset_permutations, 1, self.terminals)
-        terminals = np.transpose(terminals, (1, 0, 2))
-        out = np.concatenate([origins, terminals], axis=2)
-        shape = np.shape(out)
-        out = out.reshape((shape[0], shape[1], 2, int(shape[2]/2)))
-        return out
+        unique = np.apply_along_axis(self.np_multiset_permutations, 1, self.unique_points)
+        unique = np.transpose(unique, (1, 0, 2))
+        unique = master_sort(unique)
+        return unique
     
     #@property
     def get_distinct_roots(self):
@@ -281,7 +294,8 @@ class Chord:
                         distinct_roots.append(list(dyad.origin))        
             elif list(dyad.origin) not in distinct_roots:
                     distinct_roots.append(list(dyad.origin)) 
-        return distinct_roots
+        indexes = npi.indices(self.unique_points, distinct_roots)
+        return indexes
     
     #@property
     def get_symmetry(self):
@@ -306,9 +320,7 @@ class Chord:
         if len(self.distinct_roots) == 1:
             rots = self.rotations
             shape = np.shape(rots)
-            rots = rots.reshape((6, shape[1] * shape[2], 3))
-            unique_points = np.unique(rots, axis=1)
-            intersection = npi.intersection(*[i for i in unique_points])
+            intersection = npi.intersection(*[i for i in rots])
             return round(len(intersection) / len(self.unique_points), 2)
         else:
             return ''
@@ -320,16 +332,14 @@ class Chord:
         if len(self.distinct_roots) == 1:
             rots = self.rotations
             shape = np.shape(rots)
-            rots = rots.reshape((6, shape[1] * shape[2], 3))
             pos_in_rots = np.unique(rots, axis=1)
-            pos_tot = npi.union(*[i for i in pos_in_rots])
+            pos_tot = npi.union(*[i for i in rots])
             all_pos_occurences = pos_in_rots.reshape((np.int(np.size(pos_in_rots) / 3), 3))
             pos_tot, counts = np.unique(all_pos_occurences, axis=0, return_counts=True)
             out = np.round(np.mean(counts) / 6, 2)
             return out
         else:
             return ''
-        # print(pos_in_rots.reshape((np.int(np.size(pos_in_rots) / 3), 3)), all_pos_occurences, pos_tot, counts, out)
     
     #@property
     def get_vertices(self):
@@ -339,27 +349,32 @@ class Chord:
         vertices += [dyad.origin for dyad in self.dyads if len(dyad.o_connects) > 0]
         if len(vertices) != 0:
             vertices = np.unique(np.array(vertices), axis=0)
-        # print(np.array(vertices)
-        # print(len(vertices))
         return vertices
     
     #@property
     def get_paths(self):
-        if self.loops == 0 and self.extremities == 2:
+        intersects = [dyad.terminal for dyad in self.dyads if len(dyad.t_connects) > 1]
+        intersects += [dyad.origin for dyad in self.dyads if len(dyad.o_connects) > 1]
+        intersects = np.array(intersects)
+        if len(intersects) > 0:
+            unique = np.unique(intersects, axis=0)
+            if self.extremities > 0:
+                return self.extremities + self.loops
+            else:
+                return self.loops + len(intersects) / (3 * self.loops)
+        else: 
             return 1
-        else:
-            return self.loops + self.extremities
-    
     #@property    
     def get_loops(self):
         """Return the number of dyadic loops in the structure of the chord"""
-        if len(self.vertices) == len(self.dyads):
-            return 1
-        elif self.joints == len(self.dyads) - 1:
-            return 0
-        else:
-            out = (len(self.dyads) - self.extremities) / 4
-        return int(round(out))
+        return int(len(self.dyads) - self.layer - 1)
+        # if len(self.vertices) == len(self.dyads):
+        #     return 1
+        # elif self.joints == len(self.dyads) - 1:
+        #     return 0
+        # else:
+        #     out = (len(self.dyads) - self.extremities) / 4
+        #     return int(np.floor(out))
         
     #@property
     def get_extremities(self):
@@ -372,6 +387,14 @@ class Chord:
         out = [dyad.t_connects for dyad in self.dyads] + [dyad.o_connects for dyad in self.dyads]
         out = [i for i in out if i != []]
         return out
+        
+    def get_rotation_shell(self):
+        """Return the set of unique points crossed in all possible axis 
+        rotations""" 
+        rots = self.rotations
+        points = rots.reshape((int(np.size(rots)/3), 3))
+        return np.unique(points, axis=0)
+        
 
     vecs = property(get_vecs)
     origins = property(get_origins)
@@ -393,6 +416,7 @@ class Chord:
     loops = property(get_loops)
     extremities = property(get_extremities)
     joints = property(get_joints)
+    rotation_shell = property(get_rotation_shell)
     
     
     # chord.dims, len(chord.branches), chord.branch_num_id
@@ -403,7 +427,8 @@ class Chord:
         this_dict['dims'] = int(self.dims)
         this_dict['numOfBranches'] = len(self.branches)
         this_dict['branchNums'] = [int(i) for i in self.branch_nums]
-        this_dict['distinct_roots'] = int(len(self.distinct_roots))
+        this_dict['num_distinct_roots'] = int(len(self.distinct_roots))
+        this_dict['distinct_roots'] = [int(i) for i in self.distinct_roots]
         if self.gen_index == None: 
             self.gen_index = 0
         this_dict['gen_index'] = self.gen_index 
@@ -412,27 +437,46 @@ class Chord:
         this_dict['partial_stability'] = self.partial_stability
         this_dict['paths'] = self.paths
         this_dict['loops'] = self.loops
+        this_dict['rotation_shell'] = [[int(i) for i in j] for j in self.rotation_shell]
         return this_dict
         
         
+memo = {}
+primes = np.array([2, 3, 5])
 
+def minor_sort(pc_):
+    
+    # prim_index = np.prod(primes ** pc_, axis=1)
 
-def mp_get_equal_indexes(rotations, other_chords):
-    if __name__ == '__main__':
-        with mp.Pool(processes=4) as pool:
-            compare_indexes = cartesian_product(np.arange(len(rotations)), np.arange(len(other_chords)))
-            equality_array = np.zeros(np.shape(compare_indexes)[0], dtype=bool)
-            # print(chord_index, len(chords), len(equality_array), end='\r', flush=True)
-            equality_array = pool.starmap(set_equality, ((ci, rotations, other_chords) for ci in compare_indexes))
-            
-        return compare_indexes[np.nonzero(equality_array)]
+    # sorts = np.argsort(np.prod(primes ** pc_, axis=1))
+    sorts = np.lexsort((pc_[:, 2], pc_[:, 1], pc_[:, 0]))
 
-def set_equality(ci, rotations, other_chords):
-    perm_input_len = np.shape(rotations[ci[0]])[0]
-    intersection = npi.intersection(rotations[ci[0]], other_chords[ci[1]])  
-    if len(intersection) == len(rotations[ci[0]]):
-        return True 
+    return pc_[sorts]
+    # return pc_
 
+def master_sort(pc):
+    for i, p in enumerate(pc):
+        pc[i] = minor_sort(p)
+    return pc
+
+def mp_get_equal_indexes(rotations, other_chords, pool):
+    compare_indexes = cartesian_product(np.arange(len(rotations)), np.arange(len(other_chords)))
+    
+    rots = rotations[compare_indexes[:,0]] 
+    ocs = other_chords[compare_indexes[:, 1]]
+    # rots = master_sort(rots)
+    # ocs = master_sort(ocs)
+    equality_array = np.all(rots == ocs, axis=(1, 2))   
+    
+     
+    # equality_array = np.array(pool.starmap(set_equality, ((rots[i], ocs[i]) for i in range(len(rots)))))
+    return compare_indexes[np.nonzero(equality_array)]
+
+def set_equality(rot, oc):
+    return np.all(oc == rot)
+
+# def mp_get_unique_points(chord):
+    
 # @profile
 def remove_duplicates(chords, again=False):
     """Gets rid of any chords that are exact duplicates or inverted duplicates"""
@@ -440,37 +484,35 @@ def remove_duplicates(chords, again=False):
     ids = [chord.id for chord in chords]
     duplicates = [True if id in ids[:i] else False for i, id in enumerate(ids)]
     chords = [chord for i, chord in enumerate(chords) if not duplicates[i]]
+    other_chords = np.array([i.unique_points for i in chords])
     removes = []
-    for chord_index, chord in enumerate(chords):
-        rotations = chord.get_rotations()[1:]
-        other_chords = np.array([i.position_pairs for i in chords])
-        
-        equal_indexes = mp_get_equal_indexes(rotations, other_chords)
-        
-        # 
-        # compare_indexes = cartesian_product(np.arange(len(rotations)), np.arange(len(other_chords)))
-        # equality_array = np.zeros(np.shape(compare_indexes)[0], dtype=bool)
-        # print(chord_index, len(chords), len(equality_array), end='\r', flush=True)
-        # # print('\n\n', len(compare_indexes))
-        # for i, ci in enumerate(compare_indexes):
-        #     perm_input_len = np.shape(rotations[ci[0]])[0]
-        #     intersection = npi.intersection(rotations[ci[0]], other_chords[ci[1]])  
-        #     if len(intersection) == len(rotations[ci[0]]):
-        #         equality_array[i] = True 
-        # equal_indexes = compare_indexes[np.nonzero(equality_array)]  
-        
-        if np.size(equal_indexes) > 0:
-            for ei in equal_indexes:
-                if chord_index != ei[1] and ei[1] > chord_index and  chord_index not in removes:
-                    removes.append(ei[1])
-                          
-    chords = [chord for i, chord in enumerate(chords) if i not in removes]
-    for i, chord in enumerate(chords): 
-        chords[i].gen_index = i
-    return chords
+    if __name__ == '__main__':
+        with mp.Pool(processes=16) as pool:
+            for chord_index, chord in enumerate(chords):
+                rotations = chord.rotations[1:]
+                equal_indexes = mp_get_equal_indexes(rotations, other_chords, pool)
+                print(chord_index, len(chords), end='\r', flush=True)
+                if np.size(equal_indexes) > 0:
+                    for ei in equal_indexes:
+                        if chord_index != ei[1] and ei[1] > chord_index and  chord_index not in removes:
+                            removes.append(ei[1])
+                                  
+            chords = [chord for i, chord in enumerate(chords) if i not in removes]
+            for i, chord in enumerate(chords): 
+                chords[i].gen_index = i
+            return chords
+    
+    
     
 # @profile
 def generate_base_chords(layers):
+    # try: 
+    #     chords = pickle.load(open('python/pickles/save_' + str(layers-1) + '.p', 'rb'))
+    # except: 
+    #     chords = [Chord()]
+    #     chords[0].construct_branches()
+    #     save_json(chords, 0)
+    #     pickle.dump(chords, open('python/pickles/save_' + str(layers)+'.p', 'wb'))
     chords = [Chord()]
     for layer in range(layers):
         next_layer = []
@@ -478,11 +520,15 @@ def generate_base_chords(layers):
             next_layer.extend(chord.grow_layer())
         chords = next_layer
         chords = remove_duplicates(chords)
-        # chords = remove_duplicates(chords, again=True)
         next_layer = []
-    for i, chord in enumerate(chords):
-        chord.construct_branches()
-        chord.num = i
+        for i, chord in enumerate(chords):
+            chord.construct_branches()
+            chord.num = i
+            chord.layer = layer + 1
+            chord.get_rotation_shell()
+        save_json(chords, layer + 1)
+        pickle.dump(chords, open('python/pickles/save_' + str(layer+1)+'.p', 'wb'))
+        
     assign_branch_num_id(chords)
     return chords
 
@@ -558,22 +604,20 @@ def write_sheet(chords, layer):
     sheet.update('A' + str(2), data)
     batch.execute()
 
-def save_json(chords):
+def save_json(chords, layer):
     with open('src/json/chords' + str(layer) + '.json', 'w') as outfile:    
         out = [chord.get_dict() for chord in chords]
         json.dump(out, outfile)
 
 all_multiset_perms = {}    
-# layer = 1
-# # 
+layer = 5
 if __name__ == "__main__":
-    import cProfile
-    
-    pr = cProfile.Profile()
-    pr.enable()
-    generate_base_chords(3)
-    pr.disable()
-    pr.print_stats(sort='cumtime')
+    # import cProfile
+    # pr = cProfile.Profile()
+    # pr.enable()
+    chords = generate_base_chords(layer)
+
+
 
 # for layer in range(3, 3):
 #     chords = generate_base_chords(layer-1)
@@ -582,5 +626,6 @@ if __name__ == "__main__":
 # 
 #     save_json(chords)
 #     save_all_diagrams(chords, layer)
-#     for i, chord in enumerate(chords):
-#         print(i, chord.partial_stability)
+
+# 
+# chords = pickle.load(open('python/pickles/save_' + str(5)+'.p', 'rb'))

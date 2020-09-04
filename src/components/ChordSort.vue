@@ -1,35 +1,39 @@
 <template>
-  <div class='column'>
-    <div class='panel'>
-      <div class='layerSelect' v-for="chord in chords" :key='chord.id'>
-        <label>{{chord.id}}</label>
-        <input type='radio' :value='chord.id' :checked='chord.state' v-model='checkedChords'>
-      </div>
+<div class='column'>
+  <div class='panel'>
+    <div class='layerSelect' v-for="chord in chords" :key='chord.id'>
+      <label>{{chord.id}}</label>
+      <input type='radio' :value='chord.id' :checked='chord.state' v-model='checkedChords'>
     </div>
-    <div class = 'sortPanel'>
-      <div class='sortChoice' v-for="(statName, i) in statNames" :key='i' @click='reSort(statName.index)'>
-        
-        <label v-show='showIcon[statName.index]'>{{sortDir[dir]}}</label>
-      </div>
+  </div>
+  <div class='sortPanel'>
+    <div class='sortChoice' v-for="(statName, i) in statNames" :key='i' @click='reSort(statName.index)'>
+
+      <label v-show='showIcon[statName.index]'>{{sortDir[dir]}}</label>
     </div>
-    <div class='chordList'>
-      <div class='chordBox' v-for="(chord, index) in sortedChords" :key='index' 
-        @click='emitChord(chord, index)' :ref='index'
-      >
-        <div class='stats' v-for="statName in statNames" :key='chord[statName.name].containments'>
-          <!-- <div class='statColumn'> -->
-            <div class='label'>{{statName.abbreviation}}</div>
-            <div class='label'>{{chord[statName.name]}}</div>
-          <!-- </div> -->
+  </div>
+  
+  
+  <!-- <div class='statNames' v-for="statName in statNames" :key='statName'>
+  </div> -->
+<div class='statNameBox'>
+  <div class='statNames' v-for="statName in statNames" :key='statName.index'>
+  <div class='statColumn'>
+  </div>
+    <div class='label'>{{statName.abbreviation}}</div>
+  </div>
+</div>
+  <div class='chordList'>
+    
+    <div class='chordBox' v-for="(chord, index) in sortedChords" :key='index' @click='emitChord(chord, index)' :ref='index'>
+      <div class='stats' v-for="statName in statNames" :key='statName.index'>
+        <div class='statColumn'>
+          <div class='label'>{{chord[statName.name]}}</div>
         </div>
-        
-        <!-- <img :src='DummyImage'/>  -->
-      
-        
-        <!-- {{chord}} -->
       </div>
     </div>
   </div>
+</div>
 </template>
 <script>
 import chords5 from '../json/chords5.json';
@@ -37,6 +41,7 @@ import chords4 from '../json/chords4.json';
 import chords3 from '../json/chords3.json';
 import chords2 from '../json/chords2.json';
 import chords1 from '../json/chords1.json';
+import chords0 from '../json/chords0.json';
 import EventBus from '../eventBus.js';
 // import BaseIcon from './_base/BaseIcon.vue';
 // import DummyImage from '@/assets/svgs/chords1chord0.svg';
@@ -54,10 +59,15 @@ export default {
       sortDir: ["\u25B2", "\u25BC"],
       dir: 0,
       chords: {
+        0: {
+          id: '0',
+          chords: chords0,
+          state: true
+        },
         1: {
           id: '1',
           chords: chords1,
-          state: true
+          state: false
         },
         2: {
           id: '2',
@@ -98,11 +108,11 @@ export default {
         },
         'numOfBranches': {
           name: 'numOfBranches',
-          abbreviation: 'branches',
+          abbreviation: 'brs',
           index: 3,
         },
-        'distinct_roots': {
-          name: 'distinct_roots',
+        'num_distinct_roots': {
+          name: 'num_distinct_roots',
           abbreviation: 'roots',
           index: 4
         },
@@ -111,6 +121,26 @@ export default {
           abbreviation: 'sym',
           index: 5
         },
+        'stability': {
+          name: 'stability',
+          abbreviation: 'stab',
+          index: 6
+        },
+        'partial_stability': {
+          name: 'partial_stability',
+          abbreviation: 'pStab',
+          index: 7
+        },
+        'paths': {
+          name: 'paths',
+          abbreviation: 'paths',
+          index: 8
+        },
+        'loops': {
+          name: 'loops',
+          abbreviation: 'loops',
+          index: 9
+        }
       },
       showIcon: [true, false, false, false]
       
@@ -135,10 +165,12 @@ export default {
   methods: {
     
     emitChord(chord, index) {
-      // console.log(this.chords[this.checkedChords].chords.findIndex(chord))
-      const chords = this.chords[this.checkedChords].chords;
-      console.log(chords.indexOf(chord))
-      EventBus.$emit('newChord', chord.points);
+      const chordPacket = {
+        newChord: chord.points, 
+        rotationShell: chord.rotation_shell,
+        roots: chord.distinct_roots,
+      }
+      EventBus.$emit('chordPacket', chordPacket);
       if (this.selected) this.selected.classList.remove('selected');
       this.selected = this.$refs[index][0];
       this.selected.classList.add('selected');
@@ -161,6 +193,9 @@ export default {
 }
 </script>
 <style scoped>
+body {
+  margin: 0
+}
 .column {
   display: flex;
   position: absolute;
@@ -169,7 +204,7 @@ export default {
   justify-content: flex-start;
   background-color: black;
   height: 100vh;
-  width: 350px;
+  width: 450px;
 }
 
 .panel {
@@ -247,7 +282,6 @@ export default {
   flex-direction: column;
   justify-content: space-evenly;
   width: 80px;
-  /* width: 100px; */
   height: 100%;
 }
 
@@ -267,5 +301,20 @@ label {
   width: 70px;
 }
 
+.statNameBox {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-evenly;
+  height: 50px;
+  
+}
+
+.statNames {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  width: 70px;
+  /* height: 100%; */
+}
 
 </style>

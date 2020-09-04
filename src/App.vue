@@ -1,7 +1,8 @@
 <template>
   <div id="app">
+    <ChordSort z-index='0'/>
     <JustPlot z-index='0'/>
-    <ChordSort z-index='1'/>
+    
   </div>
 </template>
 
@@ -27,12 +28,15 @@ export default {
   -moz-osx-font-smoothing: grayscale;
   text-align: center;
   color: #2c3e50;
+  
 }
 
 body {
   margin: 0;
   background-color: blue;
 }
+
+
 
 
 </style>

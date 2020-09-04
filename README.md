@@ -1,3 +1,5 @@
+
+
 # just-intonation-world
 
 ## Project setup
@@ -10,15 +12,4 @@ npm install
 npm run serve
 ```
 
-### Compiles and minifies for production
-```
-npm run build
-```
-
-### Lints and fixes files
-```
-npm run lint
-```
-
-### Customize configuration
-See [Configuration Reference](https://cli.vuejs.org/config/).
+### Only works in Firefox currently. I'm not sure why it doesn't work in Chrome. I know why it doesn't work in Safari. 

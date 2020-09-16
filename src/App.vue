@@ -34,6 +34,11 @@ export default {
 body {
   margin: 0;
   background-color: blue;
+  height: 100vh;
+}
+
+html {
+  overflow: hidden;
 }
 
 

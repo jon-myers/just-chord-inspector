@@ -3,13 +3,13 @@ from scipy.spatial.transform import Rotation as R
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from sympy.utilities.iterables import multiset_permutations
-from gspread_formatting import *
+# from gspread_formatting import *
 import numpy_indexed as npi
 from os.path import dirname, abspath
 from functools import reduce, lru_cache
 import multiprocessing as mp
 # from collections import counter
-import os, sys, shutil, pickle, copy, gspread, json, jsonpickle, itertools, ray
+import os, sys, shutil, pickle, copy, json, jsonpickle, itertools
 
 
 def memoize(f):
@@ -389,11 +389,20 @@ class Chord:
         return out
         
     def get_rotation_shell(self):
-        """Return the set of unique points crossed in all possible axis 
-        rotations""" 
+        """Return the set of unique points in all possible axis rotations""" 
         rots = self.rotations
         points = rots.reshape((int(np.size(rots)/3), 3))
         return np.unique(points, axis=0)
+        
+    def get_full_complement(self):
+        for point in self.unique_points:
+            complement = cartesian_product(*[np.arange(i+1) for i in point])
+            if 'full_complement' not in locals():
+                full_complement = complement
+            else:
+                full_complement = np.vstack((full_complement, complement))
+        return np.unique(full_complement, axis=0)
+            
         
 
     vecs = property(get_vecs)
@@ -417,10 +426,12 @@ class Chord:
     extremities = property(get_extremities)
     joints = property(get_joints)
     rotation_shell = property(get_rotation_shell)
+    full_complement = property(get_full_complement)
     
     
     # chord.dims, len(chord.branches), chord.branch_num_id
     def get_dict(self):
+        if not hasattr('self', 'layer'): self.layer = 0
         this_dict = {}
         this_dict['points'] = list([[int(k) for k in list(i)] for i in self.unique_points])
         this_dict['containments'] = int(self.containments)
@@ -507,15 +518,19 @@ def remove_duplicates(chords, again=False):
     
     
 # @profile
-def generate_base_chords(layers):
+def generate_chords(layers):
     # try: 
     #     chords = pickle.load(open('python/pickles/save_' + str(layers-1) + '.p', 'rb'))
     # except: 
     #     chords = [Chord()]
     #     chords[0].construct_branches()
-    #     save_json(chords, 0)
-    #     pickle.dump(chords, open('python/pickles/save_' + str(layers)+'.p', 'wb'))
     chords = [Chord()]
+    chords[0].construct_branches()
+    chords[0].num = 0
+    chords[0].layer = 0
+    save_json(chords, 0)
+    pickle.dump(chords, open('python/pickles/save_' + str(layers)+'.p', 'wb'))
+    
     for layer in range(layers):
         next_layer = []
         for chord in chords:
@@ -605,28 +620,75 @@ def write_sheet(chords, layer):
     sheet.update('A' + str(2), data)
     batch.execute()
 
-def save_json(chords, layer):
-    with open('src/json/chords' + str(layer) + '.json', 'w') as outfile:    
+def save_json(chords, layer, type = 'chords'):
+    with open('src/json/' + type + str(layer) + '.json', 'w') as outfile:
         out = [chord.get_dict() for chord in chords]
         json.dump(out, outfile)
 
-all_multiset_perms = {}    
-layer = 6
-if __name__ == "__main__":
-    # import cProfile
-    # pr = cProfile.Profile()
-    # pr.enable()
-    chords = generate_base_chords(layer)
+def save_branches(layers):
+    all_chords = [pickle.load(open('python/pickles/save_' + str(i) + '.p', 'rb')) for i in range(layers)]
+    all_branches = [[chord for chord in chords if len(chord.distinct_roots) == 1] for chords in all_chords]
+    for i, branches in enumerate(all_branches):
+        save_json(branches, i, 'branches')
 
+class NpEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return super(NpEncoder, self).default(obj)
 
+def save_shells():
+    branches = [json.load(open('src/json/branches' + str(i) + '.json', 'rb')) for i in range(7)]
+    branch_sizes = np.array([len(i) for i in branches])
+    branch_start_inds = np.array((0, *np.cumsum(branch_sizes)[:-1]))
+    branches = [i for i in itertools.chain.from_iterable(branches)]
+    branch_shells = [branch['rotation_shell'] for branch in branches]
+    lens = list(set([len(i) for i in branch_shells]))
+    shells_obj = {}
+    unique_shells = []
+    for length in lens:
+        len_shells_obj = {}
+        shells_of_length = np.array([i for i in branch_shells if len(i) == length])
+        inds = np.array([i for i in range(len(branch_shells)) if len(branch_shells[i]) == length])
+        unq = np.unique(shells_of_length, axis=0)
+        for i, shell in enumerate(unq):
 
-# for layer in range(3, 3):
-#     chords = generate_base_chords(layer-1)
-#     pickle.dump(chords, open('python/pickles/save_' + str(layer)+'.p', 'wb'))
-#     chords = pickle.load(open('python/pickles/save_' + str(layer)+'.p', 'rb'))
-# 
-#     save_json(chords)
-#     save_all_diagrams(chords, layer)
+            eq = np.all(shells_of_length == shell, axis=(1, 2))
+            indexes = np.nonzero(eq)
+            eq_indexes = inds[indexes]
+            layers = []
+            in_branch_inds = []
+            for eq_index in eq_indexes:
+                layer = 0
+                for bsi_index, bsi in enumerate(branch_start_inds):
+                    if eq_index >= bsi:
+                        layer = bsi_index
+                in_branch_index = eq_index - branch_start_inds[layer]
+                layers.append(layer)
+                in_branch_inds.append(in_branch_index)
+                
+            shell_dict = {}
+            shell_dict['shell'] = shell.tolist()
+            shell_dict['branches'] = [{
+            'layer': layers[dict_i],
+            'index': in_branch_inds[dict_i]
+            } for dict_i in range(len(layers))]
+            len_shells_obj[str(i)] = shell_dict
+        shells_obj[str(length)] = len_shells_obj
+    json.dump(shells_obj, open('src/json/shells.json', 'w'), cls=NpEncoder)
 
-# 
-# chords = pickle.load(open('python/pickles/save_' + str(5)+'.p', 'rb'))
+def run(layer = 3):
+    all_multiset_perms = {}    
+    if __name__ == "__main__":
+        chords = generate_chords(layer)
+        save_branches(layer)
+        save_shells()    
+        for chord in chords:
+            chord.get_full_complement()
+    
+run()

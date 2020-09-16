@@ -720,11 +720,12 @@ export default {
 .canvasBox {
   position: relative;
   right: 200px;
+  height: 100vh;
 }
 .outermost {
   position: absolute;
   right: 0;
-  /* width: 100%; */
+  height: 100vh;
 }
 
 #controls {
@@ -733,7 +734,7 @@ export default {
   top: 0;
   right: 0;
   width: 200px;
-  height: 100%;
+  height: 100vh;
   float: right;
   background-color: black;
   

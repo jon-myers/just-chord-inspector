@@ -32,7 +32,7 @@ def cartesian_product(*arrays):
     for i, a in enumerate(np.ix_(*arrays)):
         arr[...,i] = a
     return arr.reshape(-1, la)
-    
+
 
 class MyEncoder(json.JSONEncoder):
     def default(self, o):
@@ -69,13 +69,13 @@ def get_ranks(array):
 
 class Branch:
     """A unidirectional collection of connected Diads—-no ambiguity in terms of containment"""
-    
+
     def __init__(self, root, dyads, chord):
         self.root = np.array(root)
         self.dyads = dyads
         self.chord = chord
         self.grow_out()
-        
+
     def grow_out(self):
         layer = self.dyads
         index = 0
@@ -86,38 +86,38 @@ class Branch:
                     if np.all(next_dyad.origin == dyad.terminal) and next_dyad not in next_layer:
                         next_layer.append(next_dyad)
             self.dyads.extend(next_layer)
-            layer = next_layer            
-    
+            layer = next_layer
+
     def overlap(self, other_branch):
-        """Measures the proportion of branch's dyads that are overlapped 
+        """Measures the proportion of branch's dyads that are overlapped
         by dyads in this other_branch."""
-        
+
         overlapping_dyads = [dyad for dyad in other_branch.dyads if dyad in self.dyads]
         return len(overlapping_dyads) / len(self.dyads)
-        
+
     def get_collective_overlap(self):
-        """Measures the proportion of branch's dyads that are overlapped by 
+        """Measures the proportion of branch's dyads that are overlapped by
         dyads in all other branches in chord."""
         other_dyads = []
         other_branches = [branch for branch in self.chord.branches if branch != self]
         overlapping_dyads = [dyad for branch in other_branches for dyad in branch.dyads if dyad not in self.dyads]
         return len(overlapping_dyads) / len(self.dyads)
-    
+
     def get_origins(self):
         return np.array([dyad.origin for dyad in self.dyads])
-    
+
     def get_terminals(self):
         return np.array([dyad.terminal for dyad in self.dyads])
-        
+
     def get_proportion(self):
         return round(len(self.dyads) / len(self.chord.dyads), 2)
-        
+
     def get_unique_points(self):
         points = np.vstack((self.origins, self.terminals))
         points = np.unique(points, axis=0)
         points = master_sort(points)
         return points
-        
+
     origins = property(get_origins)
     terminals = property(get_terminals)
     proportion = property(get_proportion)
@@ -192,14 +192,14 @@ class Chord:
         out = np.concatenate([self.origins, self.terminals], axis=1)
         shape = np.shape(out)
         return out.reshape((shape[0], 2, int(shape[1]/2)))
-        
+
     def construct_branches(self):
         self.branches = []
         for root in np.unique(self.origins, axis=0):
             dyads = [dyad for dyad in self.dyads if np.all(dyad.origin == root)]
             branch = Branch(root, dyads, self)
             self.branches.append(branch)
-            
+
     def get_branch_nums(self):
         if hasattr(self, 'branches'):
             return [len(branch.dyads) for branch in self.branches]
@@ -244,7 +244,7 @@ class Chord:
 
     def get_containments(self):
         return sum(self.branch_nums)
-    
+
     def grow_layer(self):
         layer = []
         vectors = [Dyad().vector, Dyad().rotate([0, 0, np.pi / 2]).vector, Dyad().rotate([0, -np.pi / 2, 0]).vector]
@@ -274,16 +274,16 @@ class Chord:
         out = np.array([i for i in multiset_permutations([0, 1, 2])])
         out = array[out]
         return out
-    
-    
-    
+
+
+
     #@property
     def get_rotations(self):
         unique = np.apply_along_axis(self.np_multiset_permutations, 1, self.unique_points)
         unique = np.transpose(unique, (1, 0, 2))
         unique = master_sort(unique)
         return unique
-    
+
     #@property
     def get_distinct_roots(self):
         distinct_roots = []
@@ -291,12 +291,12 @@ class Chord:
             if len(dyad.o_connects) > 0:
                 if not False in [np.all(dy.origin == dyad.origin) for dy in dyad.o_connects]:
                     if list(dyad.origin) not in distinct_roots:
-                        distinct_roots.append(list(dyad.origin))        
+                        distinct_roots.append(list(dyad.origin))
             elif list(dyad.origin) not in distinct_roots:
-                    distinct_roots.append(list(dyad.origin)) 
+                    distinct_roots.append(list(dyad.origin))
         indexes = npi.indices(self.unique_points, distinct_roots)
         return indexes
-    
+
     #@property
     def get_symmetry(self):
         rots = self.rotations
@@ -310,10 +310,10 @@ class Chord:
             return 0
         elif ct == 3:
             return 1
-        elif ct == 15: 
+        elif ct == 15:
             return 2
-    
-    #@property        
+
+    #@property
     def get_stability(self):
         """Number of positions that appear in all six rotations
         divided by the total number of points"""
@@ -324,10 +324,10 @@ class Chord:
             return round(len(intersection) / len(self.unique_points), 2)
         else:
             return ''
-    
-    #@property    
+
+    #@property
     def get_partial_stability(self):
-        """The average of the proportion of rotations in which each unique 
+        """The average of the proportion of rotations in which each unique
         position is occupied"""
         if len(self.distinct_roots) == 1:
             rots = self.rotations
@@ -340,17 +340,17 @@ class Chord:
             return out
         else:
             return ''
-    
+
     #@property
     def get_vertices(self):
-        """Coordinates of all unique points that are connected to more than one 
+        """Coordinates of all unique points that are connected to more than one
         dyad."""
         vertices = [dyad.terminal for dyad in self.dyads if len(dyad.t_connects) > 0]
         vertices += [dyad.origin for dyad in self.dyads if len(dyad.o_connects) > 0]
         if len(vertices) != 0:
             vertices = np.unique(np.array(vertices), axis=0)
         return vertices
-    
+
     #@property
     def get_paths(self):
         intersects = [dyad.terminal for dyad in self.dyads if len(dyad.t_connects) > 1]
@@ -362,12 +362,56 @@ class Chord:
                 return self.extremities + self.loops
             else:
                 return self.loops + len(unique) / (3 * self.loops)
-        else: 
+        else:
             return 1
-    #@property    
+    #@property
     def get_loops(self):
         """Return the number of dyadic loops in the structure of the chord"""
-        return int(len(self.dyads) - self.layer - 1)
+        ct = 0
+        pts = self.unique_points
+        diffs = pts[:, None] - pts[None, :]
+        dists = np.linalg.norm(diffs, axis= 2)
+        # print()
+        # print(pts, '\n\n', diffs, '\n\n', dists, '\n\n')
+
+        one_inds = np.array(np.nonzero(dists == 1)).T
+        root_two_inds = np.array(np.nonzero(dists == np.sqrt(2))).T
+
+
+        # can this be rewritten all in numpy?
+        filtered_root_two_inds = []
+        for i in root_two_inds:
+            truth = True
+            for j in filtered_root_two_inds:
+                if np.all(i[::-1] == j):
+                    truth = False
+            if truth:
+                filtered_root_two_inds.append(i)
+        filtered_root_two_inds = np.array(filtered_root_two_inds)
+
+        # print(one_inds, '\n\n', filtered_root_two_inds, '\n\n\n')
+        for i in filtered_root_two_inds:
+            ones_a = one_inds[np.nonzero(one_inds[:,0] == i[0])]
+            ones_b = one_inds[np.nonzero(one_inds[:,0] == i[1])]
+            # print(ones_a, '\n\n', ones_b, '\n\n\n')
+            pts_a = pts[ones_a[:, 1]]
+            pts_b = pts[ones_b[:, 1]]
+            intersections = npi.intersection(pts_a, pts_b)
+            if len(intersections) == 2:
+                ct += 1
+
+
+
+        # print( int(len(self.dyads) - self.layer - 1) == ct)
+        out = int(len(self.dyads) - self.layer - 1)
+        # return int(len(self.dyads) - self.layer - 1)
+
+        return ct/2
+
+        # for pt in pts:
+        #     ones = [i for i in pts if np.linalg.norm(pt - i) == 1]
+        #     diags = [i for i in pts if np.linalg.norm(pt - i) == np.sqrt(2)]
+
         # if len(self.vertices) == len(self.dyads):
         #     return 1
         # elif self.joints == len(self.dyads) - 1:
@@ -375,25 +419,29 @@ class Chord:
         # else:
         #     out = (len(self.dyads) - self.extremities) / 4
         #     return int(np.floor(out))
-        
+
+        # given (0, 0, 0) (0, 1, 0) (1, 0, 0) (1, 1, 0) (2, 1, 0) (1, 2, 0) (2, 2, 0)
+
+
+
     #@property
     def get_extremities(self):
         """Return the number of dyads that have at least one point unattached to
         any other dyads"""
         return len(self.unique_points) - len(self.vertices)
-        
+
     def get_joints(self):
         """Return the total number of connections between dyads"""
         out = [dyad.t_connects for dyad in self.dyads] + [dyad.o_connects for dyad in self.dyads]
         out = [i for i in out if i != []]
         return out
-        
+
     def get_rotation_shell(self):
-        """Return the set of unique points in all possible axis rotations""" 
+        """Return the set of unique points in all possible axis rotations"""
         rots = self.rotations
         points = rots.reshape((int(np.size(rots)/3), 3))
         return np.unique(points, axis=0)
-        
+
     def get_full_complement(self):
         for point in self.unique_points:
             complement = cartesian_product(*[np.arange(i+1) for i in point])
@@ -402,8 +450,8 @@ class Chord:
             else:
                 full_complement = np.vstack((full_complement, complement))
         return np.unique(full_complement, axis=0)
-            
-        
+
+
 
     vecs = property(get_vecs)
     origins = property(get_origins)
@@ -427,8 +475,8 @@ class Chord:
     joints = property(get_joints)
     rotation_shell = property(get_rotation_shell)
     full_complement = property(get_full_complement)
-    
-    
+
+
     # chord.dims, len(chord.branches), chord.branch_num_id
     def get_dict(self):
         if not hasattr('self', 'layer'): self.layer = 0
@@ -440,9 +488,9 @@ class Chord:
         this_dict['branchNums'] = [int(i) for i in self.branch_nums]
         this_dict['num_distinct_roots'] = int(len(self.distinct_roots))
         this_dict['distinct_roots'] = [int(i) for i in self.distinct_roots]
-        if self.gen_index == None: 
+        if self.gen_index == None:
             self.gen_index = 0
-        this_dict['gen_index'] = self.gen_index 
+        this_dict['gen_index'] = self.gen_index
         this_dict['symmetry'] = self.symmetry
         this_dict['stability'] = self.stability
         this_dict['partial_stability'] = self.partial_stability
@@ -450,15 +498,15 @@ class Chord:
         this_dict['loops'] = self.loops
         this_dict['rotation_shell'] = [[int(i) for i in j] for j in self.rotation_shell]
         this_dict['rotation_shell_size'] = len(self.rotation_shell)
-        
+
         return this_dict
-        
-        
+
+
 memo = {}
 primes = np.array([2, 3, 5])
 
 def minor_sort(pc_):
-    
+
     # prim_index = np.prod(primes ** pc_, axis=1)
 
     # sorts = np.argsort(np.prod(primes ** pc_, axis=1))
@@ -474,14 +522,14 @@ def master_sort(pc):
 
 def mp_get_equal_indexes(rotations, other_chords, pool):
     compare_indexes = cartesian_product(np.arange(len(rotations)), np.arange(len(other_chords)))
-    
-    rots = rotations[compare_indexes[:,0]] 
+
+    rots = rotations[compare_indexes[:,0]]
     ocs = other_chords[compare_indexes[:, 1]]
     # rots = master_sort(rots)
     # ocs = master_sort(ocs)
-    equality_array = np.all(rots == ocs, axis=(1, 2))   
-    
-     
+    equality_array = np.all(rots == ocs, axis=(1, 2))
+
+
     # equality_array = np.array(pool.starmap(set_equality, ((rots[i], ocs[i]) for i in range(len(rots)))))
     return compare_indexes[np.nonzero(equality_array)]
 
@@ -489,7 +537,7 @@ def set_equality(rot, oc):
     return np.all(oc == rot)
 
 # def mp_get_unique_points(chord):
-    
+
 # @profile
 def remove_duplicates(chords, again=False):
     """Gets rid of any chords that are exact duplicates or inverted duplicates"""
@@ -509,19 +557,19 @@ def remove_duplicates(chords, again=False):
                     for ei in equal_indexes:
                         if chord_index != ei[1] and ei[1] > chord_index and  chord_index not in removes:
                             removes.append(ei[1])
-                                  
+
             chords = [chord for i, chord in enumerate(chords) if i not in removes]
-            for i, chord in enumerate(chords): 
+            for i, chord in enumerate(chords):
                 chords[i].gen_index = i
             return chords
-    
-    
-    
+
+
+
 # @profile
 def generate_chords(layers):
-    # try: 
+    # try:
     #     chords = pickle.load(open('python/pickles/save_' + str(layers-1) + '.p', 'rb'))
-    # except: 
+    # except:
     #     chords = [Chord()]
     #     chords[0].construct_branches()
     chords = [Chord()]
@@ -530,7 +578,7 @@ def generate_chords(layers):
     chords[0].layer = 0
     save_json(chords, 0)
     pickle.dump(chords, open('python/pickles/save_' + str(layers)+'.p', 'wb'))
-    
+
     for layer in range(layers):
         next_layer = []
         for chord in chords:
@@ -544,7 +592,7 @@ def generate_chords(layers):
             chord.layer = layer + 1
         save_json(chords, layer + 1)
         pickle.dump(chords, open('python/pickles/save_' + str(layer+1)+'.p', 'wb'))
-        
+
     assign_branch_num_id(chords)
     return chords
 
@@ -560,7 +608,7 @@ def save_diagrams(chords, path, name='chord', layer=3):
         # ax.set_zlim3d(XYZlim)
         ax.axis('off')
 
-        ax.scatter(*chord.unique_points.T, color='lightsalmon', depthshade=False) 
+        ax.scatter(*chord.unique_points.T, color='lightsalmon', depthshade=False)
         for dyad in chord.dyads:
             ax.plot(*np.array([dyad.origin, dyad.terminal]).T, color='lightsalmon')
         plt.tight_layout()
@@ -580,8 +628,8 @@ def save_all_diagrams(chords, layer):
             os.mkdir(b_path)
         save_diagrams(chord.branches, base_path + '/src/assets/svgs/layer_' + str(layer) + '/branches_' + str(c), 'branch', layer)
     save_diagrams(chords, base_path + '/src/assets/svgs/chords'+str(layer), 'chord', layer)
-    
-    
+
+
 def assign_branch_num_id(chords):
     branch_nums = [str(chord.branch_nums) for chord in chords]
     unique_branch_nums = list(set(branch_nums))
@@ -594,12 +642,12 @@ def write_sheet(chords, layer):
     gc = gspread.service_account(filename='keys/chord-analysis-5780b5bae94b.json')
     sheets = gc.open("chord-analysis")
     sheet = sheets.worksheet('layer_' + str(layer))
-    
+
     titles = ['Points', 'Containments', 'Dimensions', 'Branches', 'Branch Sizes ID', 'Branch Size', 'Proportion', 'Overlap']
     titles_fmt = cellFormat(textFormat = textFormat(bold=True, fontSize=14))
     chord_fmt = cellFormat(backgroundColor=color(0.352, 0.768, 0.270))
     branch_fmt = cellFormat(backgroundColor=color(0.560, 0.262, 0.098), textFormat=textFormat(foregroundColor=color(1, 1, 1)))
-    
+
     batch = batch_updater(sheets)
     batch.format_cell_range(sheet, '1', titles_fmt)
     sheet.update('B1', [titles])
@@ -671,7 +719,7 @@ def save_shells():
                 in_branch_index = eq_index - branch_start_inds[layer]
                 layers.append(layer)
                 in_branch_inds.append(in_branch_index)
-                
+
             shell_dict = {}
             shell_dict['shell'] = shell.tolist()
             shell_dict['branches'] = [{
@@ -683,12 +731,13 @@ def save_shells():
     json.dump(shells_obj, open('src/json/shells.json', 'w'), cls=NpEncoder)
 
 def run(layer = 3):
-    all_multiset_perms = {}    
+    all_multiset_perms = {}
     if __name__ == "__main__":
         chords = generate_chords(layer)
         save_branches(layer)
-        save_shells()    
+        save_shells()
         for chord in chords:
             chord.get_full_complement()
-    
-run()
+            chord.get_loops()
+
+run(5)

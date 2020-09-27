@@ -315,10 +315,12 @@ export default {
     },
 
     emitChord(chord, index) {
+      const roots = chord.distinct_roots;
       const chordPacket = {
         newChord: chord.points,
         rotationShell: chord.rotation_shell,
-        roots: chord.distinct_roots,
+        roots: roots,
+        primaryRoot: roots[Math.floor(Math.random() * roots.length)]
       }
       EventBus.$emit('chordPacket', chordPacket);
       if (this.selected) this.selected.classList.remove('selected');

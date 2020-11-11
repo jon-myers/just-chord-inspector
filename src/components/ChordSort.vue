@@ -37,10 +37,12 @@
 
       <div class='chordBox' v-for="(chord, index) in sortedChords" :key='index' 
       @click='emitChord(chord, index)' :ref='index'>
-        <div class='stats' v-for="statName in statNames" :key='statName.index'>
-          <div class='statColumn'>
-            <div class='label'>{{chord[statName.name]}}</div>
-          </div>
+        <div class='stats label' v-for="statName in statNames" :key='statName.index'>
+          <!-- <div class='statColumn'> -->
+            <!-- <div class='label'> -->
+              {{chord[statName.name]}}
+            <!-- </div> -->
+          <!-- </div> -->
         </div>
       </div>
     </div>
@@ -218,7 +220,7 @@ export default {
       statNames: {
         'gen_index': {
           name: 'gen_index',
-          abbreviation: 'index',
+          abbreviation: 'id',
           index: 0
         },
         'containments': {
@@ -270,7 +272,23 @@ export default {
           name: 'rotation_shell_size',
           abbreviation: 'shell',
           index: 10
+        },
+        'full_complement_size': {
+          name: 'full_complement_size',
+          abbreviation: 'comp',
+          index: 11
+        },
+        'full_complement_ratio': {
+          name: 'full_complement_ratio',
+          abbreviation: 'cRat' ,
+          index: 12
+        },
+        'mean_path_ratios': {
+          name: 'mean_path_ratios',
+          abbreviation: 'mpRat',
+          index: 13
         }
+        
       },
       showIcon: [true, false, false, false]
 
@@ -320,7 +338,8 @@ export default {
         newChord: chord.points,
         rotationShell: chord.rotation_shell,
         roots: roots,
-        primaryRoot: roots[Math.floor(Math.random() * roots.length)]
+        primaryRoot: roots[Math.floor(Math.random() * roots.length)],
+        fullComplement: chord.full_complement
       }
       EventBus.$emit('chordPacket', chordPacket);
       if (this.selected) this.selected.classList.remove('selected');

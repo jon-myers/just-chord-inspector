@@ -9,7 +9,7 @@ from os.path import dirname, abspath
 from functools import reduce, lru_cache
 import multiprocessing as mp
 # from collections import counter
-import os, sys, shutil, pickle, copy, json, jsonpickle, itertools
+import os, sys, shutil, pickle, copy, json, jsonpickle, itertools, math
 
 
 def memoize(f):
@@ -32,6 +32,10 @@ def cartesian_product(*arrays):
     for i, a in enumerate(np.ix_(*arrays)):
         arr[...,i] = a
     return arr.reshape(-1, la)
+    
+def unique_permutations(arr):
+    return np.array(list(set(itertools.permutations(arr))))
+    
 
 
 class MyEncoder(json.JSONEncoder):
@@ -350,7 +354,7 @@ class Chord:
         if len(vertices) != 0:
             vertices = np.unique(np.array(vertices), axis=0)
         return vertices
-
+        
     #@property
     def get_paths(self):
         intersects = [dyad.terminal for dyad in self.dyads if len(dyad.t_connects) > 1]
@@ -358,25 +362,19 @@ class Chord:
         intersects = np.array(intersects)
         if len(intersects) > 0:
             unique = np.unique(intersects, axis=0)
-            if self.extremities > 0:
-                return self.extremities + self.loops
-            else:
-                return self.loops + len(unique) / (3 * self.loops)
+            num_of_intersects = len(unique)
+            return self.loops + (num_of_intersects - 1) + self.extremities
         else:
             return 1
-    #@property
+
     def get_loops(self):
         """Return the number of dyadic loops in the structure of the chord"""
         ct = 0
         pts = self.unique_points
         diffs = pts[:, None] - pts[None, :]
         dists = np.linalg.norm(diffs, axis= 2)
-        # print()
-        # print(pts, '\n\n', diffs, '\n\n', dists, '\n\n')
-
         one_inds = np.array(np.nonzero(dists == 1)).T
         root_two_inds = np.array(np.nonzero(dists == np.sqrt(2))).T
-
 
         # can this be rewritten all in numpy?
         filtered_root_two_inds = []
@@ -388,42 +386,18 @@ class Chord:
             if truth:
                 filtered_root_two_inds.append(i)
         filtered_root_two_inds = np.array(filtered_root_two_inds)
-
-        # print(one_inds, '\n\n', filtered_root_two_inds, '\n\n\n')
         for i in filtered_root_two_inds:
             ones_a = one_inds[np.nonzero(one_inds[:,0] == i[0])]
             ones_b = one_inds[np.nonzero(one_inds[:,0] == i[1])]
-            # print(ones_a, '\n\n', ones_b, '\n\n\n')
             pts_a = pts[ones_a[:, 1]]
             pts_b = pts[ones_b[:, 1]]
             intersections = npi.intersection(pts_a, pts_b)
             if len(intersections) == 2:
                 ct += 1
-
-
-
-        # print( int(len(self.dyads) - self.layer - 1) == ct)
         out = int(len(self.dyads) - self.layer - 1)
-        # return int(len(self.dyads) - self.layer - 1)
 
         return ct/2
-
-        # for pt in pts:
-        #     ones = [i for i in pts if np.linalg.norm(pt - i) == 1]
-        #     diags = [i for i in pts if np.linalg.norm(pt - i) == np.sqrt(2)]
-
-        # if len(self.vertices) == len(self.dyads):
-        #     return 1
-        # elif self.joints == len(self.dyads) - 1:
-        #     return 0
-        # else:
-        #     out = (len(self.dyads) - self.extremities) / 4
-        #     return int(np.floor(out))
-
-        # given (0, 0, 0) (0, 1, 0) (1, 0, 0) (1, 1, 0) (2, 1, 0) (1, 2, 0) (2, 2, 0)
-
-
-
+        
     #@property
     def get_extremities(self):
         """Return the number of dyads that have at least one point unattached to
@@ -436,22 +410,50 @@ class Chord:
         out = [i for i in out if i != []]
         return out
 
+        # to do: make a version for chords with multiple roots.
     def get_rotation_shell(self):
-        """Return the set of unique points in all possible axis rotations"""
+        """Return the set of unique points in all possible axis rotations. 
+        Currently only makes sense for branches / chords with one root."""
         rots = self.rotations
         points = rots.reshape((int(np.size(rots)/3), 3))
         return np.unique(points, axis=0)
 
+
+        # to do: make version for chords with multiple roots
     def get_full_complement(self):
+        """Return the set of unique points included in all of the possible paths
+        between the root and all chord members. Only makes sense for branches, 
+        I think, because requires root to be at [0, 0, 0]."""
         for point in self.unique_points:
             complement = cartesian_product(*[np.arange(i+1) for i in point])
             if 'full_complement' not in locals():
                 full_complement = complement
             else:
                 full_complement = np.vstack((full_complement, complement))
-        return np.unique(full_complement, axis=0)
-
-
+        return np.unique(full_complement, axis=0)\
+        
+    def get_mean_path_ratios(self):
+        """For each distinct root, calculates the set of possible paths from 
+        that root to each of the points it contains, and returns the mean of the 
+        proportion of those paths for which all of its points are contained in 
+        the chord."""
+        roots = self.unique_points[self.distinct_roots]
+        means = []
+        for root in roots:
+            ratios = []
+            relevent_points = [i for i in self.unique_points if np.any(i != root) and np.all(i - root >= 0)]
+            for point in relevent_points:
+                paths = paths_to_point(point, root)
+                ct = 0
+                for path in paths:
+                    intersection = npi.intersection(path, self.unique_points)
+                    if len(intersection) == len(path):
+                        ct += 1
+                ratio = ct / len(paths)
+                ratios.append(ratio) 
+            mean = np.mean(np.array(ratios))
+            means.append(np.mean(np.array(ratios)))
+        return means
 
     vecs = property(get_vecs)
     origins = property(get_origins)
@@ -475,6 +477,7 @@ class Chord:
     joints = property(get_joints)
     rotation_shell = property(get_rotation_shell)
     full_complement = property(get_full_complement)
+    mean_path_ratios = property(get_mean_path_ratios)
 
 
     # chord.dims, len(chord.branches), chord.branch_num_id
@@ -498,6 +501,12 @@ class Chord:
         this_dict['loops'] = self.loops
         this_dict['rotation_shell'] = [[int(i) for i in j] for j in self.rotation_shell]
         this_dict['rotation_shell_size'] = len(self.rotation_shell)
+        this_dict['rotation_shell_ratio'] = len(self.unique_points) / len(self.rotation_shell)
+        this_dict['full_complement'] = [[int(i) for i in j] for j in self.full_complement]
+        this_dict['full_complement_size'] = len(self.full_complement)
+        this_dict['full_complement_ratio'] = round(len(self.unique_points) / len(self.full_complement), 2)
+        this_dict['mean_path_ratios'] = [round(i, 2) for i in self.mean_path_ratios][0]
+        
 
         return this_dict
 
@@ -730,14 +739,35 @@ def save_shells():
         shells_obj[str(length)] = len_shells_obj
     json.dump(shells_obj, open('src/json/shells.json', 'w'), cls=NpEncoder)
 
+def paths_to_point(point, root = [0, 0, 0]):
+    """Returns a list of sets of points outlining each of the possible paths 
+    between root and point."""
+    point = np.array(point)
+    root = np.array(root)
+    point = point - root
+    num_of_paths = np.product(point + 1)
+    increments_0 = np.repeat(0, point[0])
+    increments_1 = np.repeat(1, point[1])
+    increments_2 = np.repeat(2, point[2])
+    increments = np.hstack((increments_0, increments_1, increments_2))   
+    inc_paths = unique_permutations(increments)
+    paths = [] 
+    for ip in inc_paths:
+        path = np.zeros((len(ip) + 1, 3), dtype = int)
+        for i, item in enumerate(ip):
+            path[i+1:, item] += 1
+        path += root
+        paths.append(path)
+    paths = np.array(paths)
+    return paths
+
 def run(layer = 3):
     all_multiset_perms = {}
     if __name__ == "__main__":
         chords = generate_chords(layer)
         save_branches(layer)
         save_shells()
-        for chord in chords:
-            chord.get_full_complement()
-            chord.get_loops()
+
+                
 
 run(5)

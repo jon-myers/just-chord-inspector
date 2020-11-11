@@ -19,7 +19,10 @@ export default {
       slewTime: 0.01,
       masterGain: 0.5,
       chord: [],
-      
+      sineLevel: 0.35,
+      triLevel: 0.35,
+      squareLevel: 0.15,
+      sawtoothLevel: 0.15,      
     }
   },
   
@@ -89,8 +92,22 @@ export default {
       const objs = this.oscBank.filter((_, i) => i < this.chord.length);
       const gains = objs.map(obj => obj.gainNode.gain.value);
       EventBus.$emit('currentGains', gains);
+    });
+    
+    EventBus.$on('synthPacket', synthPacket => {
+      this.oscBank.forEach(osc => {
+        osc.sineGain.gain.setValueAtTime(osc.sineGain.gain.value, this.now());
+        osc.sineGain.gain.linearRampToValueAtTime(synthPacket.sine, this.now() + this.slewTime);
+        osc.triGain.gain.setValueAtTime(osc.triGain.gain.value, this.now());
+        osc.triGain.gain.linearRampToValueAtTime(synthPacket.tri, this.now() + this.slewTime);
+        osc.sawtoothGain.gain.setValueAtTime(osc.sawtoothGain.gain.value, this.now());
+        osc.sawtoothGain.gain.linearRampToValueAtTime(synthPacket.saw, this.now() + this.slewTime);
+        osc.squareGain.gain.setValueAtTime(osc.squareGain.gain.value, this.now());
+        osc.squareGain.gain.linearRampToValueAtTime(synthPacket.square, this.now() + this.slewTime);
+        osc.filter.frequency.setValueAtTime(osc.filter.frequency.value, this.now());
+        osc.filter.frequency.exponentialRampToValueAtTime(synthPacket.filter, this.now() + this.slewTime)
+      });
     })
-      
   },
   
   methods: {
@@ -129,11 +146,14 @@ export default {
           return (dim ** rotNote[i]) * (2 ** (rotNote[i] * this.octs[i]))
         });
         const freq = this.fund * mult.reduce((a, b) => a * b, 1);
-        const osc = this.oscBank[n].osc;
+        const obj = this.oscBank[n];
+        const oscs = [obj.sine, obj.tri, obj.square, obj.sawtooth]
         const gainNode = this.oscBank[n].gainNode;
         const encode = this.oscBank[n].ambiEncode;
-        osc.frequency.setValueAtTime(freq, this.now() + this.slewTime);
         const level = 1 / this.chord.length;
+        oscs.forEach(osc => {
+          osc.frequency.setValueAtTime(freq, this.now() + this.slewTime)
+        })
         gainNode.gain.setValueAtTime(0, this.now()+this.slewTime);
         gainNode.gain.linearRampToValueAtTime(level, this.now() + 2 * this.slewTime);
         const az = Math.PI * (2 * Math.random() - 1);
@@ -146,6 +166,10 @@ export default {
     
     updatePlaybackMode() {
       if (this.playbackMode === 'drone') {
+        if (this.melodyInterval) {
+          clearInterval(this.melodyInterval);
+          this.melodyInterval = undefined;
+        }
         if (!this.interval) {
           this.interval = setInterval(() => {
             this.chord.forEach((_, i) => {
@@ -158,12 +182,21 @@ export default {
         if (this.interval) {
           clearInterval(this.interval);
           this.interval = undefined;
-          this.chord.forEach((_, i) => {
-            const gain = this.oscBank[i].gainNode.gain;
-            gain.setValueAtTime(gain.value, this.now());
-            const level = 1 / this.chord.length;
-            gain.linearRampToValueAtTime(level, this.now() + this.slewTime);
-          })
+        }
+        if (this.melodyInterval) {
+          clearInterval(this.melodyInterval);
+          this.melodyInterval = undefined;
+        }
+        this.chord.forEach((_, i) => {
+          const gain = this.oscBank[i].gainNode.gain;
+          gain.setValueAtTime(gain.value, this.now());
+          const level = 1 / this.chord.length;
+          gain.linearRampToValueAtTime(level, this.now() + this.slewTime);
+        })      
+      } else if (this.playbackMode === 'melody') {
+        if (this.interval) {
+          clearInterval(this.interval);
+          this.interval = undefined;
         }
       }
     },
@@ -204,25 +237,65 @@ export default {
     },
     
     makeOsc() {
-      const osc = this.ac.createOscillator();
-      osc.type = 'triangle';
+      const sine = this.ac.createOscillator();
+      const tri = this.ac.createOscillator();
+      const sawtooth = this.ac.createOscillator(); 
+      const square = this.ac.createOscillator();
+      const sineGain = this.ac.createGain();
+      const triGain = this.ac.createGain();
+      const sawtoothGain = this.ac.createGain();
+      const squareGain = this.ac.createGain();
       const gainNode = this.ac.createGain();
       const options = {numberOfOutputs: 1, outputChannelCount: [4]}
       const ambiEncode = new AudioWorkletNode(this.ac, 'monoEncode', options);
-      ambiEncode.azimuth = ambiEncode.parameters.get('azimuth');
-      ambiEncode.elevation = ambiEncode.parameters.get('elevation');
-      gainNode.gain.setValueAtTime(0, this.ac.currentTime)
-      osc.connect(gainNode);
-      gainNode.connect(this.monoMix);
-      gainNode.connect(ambiEncode);
+      const filter = this.ac.createBiquadFilter();
+      
+      
+      sine.connect(sineGain);
+      tri.connect(triGain);
+      sawtooth.connect(sawtoothGain);
+      square.connect(squareGain);
+      sineGain.connect(gainNode);
+      triGain.connect(gainNode);
+      sawtoothGain.connect(gainNode);
+      squareGain.connect(gainNode);
+      gainNode.connect(filter);
+      filter.connect(this.monoMix);
+      filter.connect(ambiEncode);
       ambiEncode.connect(this.foaRenderer.input);
       
-      osc.start(this.now());
+      tri.type = 'triangle';
+      sawtooth.type = 'sawtooth';
+      square.type = 'square';
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1500, this.now());
+      ambiEncode.azimuth = ambiEncode.parameters.get('azimuth');
+      ambiEncode.elevation = ambiEncode.parameters.get('elevation');
+      
+      sineGain.gain.setValueAtTime(this.sineLevel, this.now());
+      triGain.gain.setValueAtTime(this.triLevel, this.now());
+      sawtoothGain.gain.setValueAtTime(this.sawtoothLevel, this.now());
+      squareGain.gain.setValueAtTime(this.squareLevel, this.now());
+      gainNode.gain.setValueAtTime(0, this.ac.currentTime)
+      
+      sine.start(this.now());
+      tri.start(this.now());
+      sawtooth.start(this.now());
+      square.start(this.now());
+      
       const obj = {
-        osc: osc,
+        sine: sine,
+        tri: tri,
+        sawtooth: sawtooth,
+        square: square,
+        sineGain: sineGain,
+        triGain: triGain,
+        squareGain: squareGain,
+        sawtoothGain: sawtoothGain,
         gainNode: gainNode,
         ambiEncode: ambiEncode,
         walkVal: 1,
+        filter: filter,
       };
       return obj      
     },

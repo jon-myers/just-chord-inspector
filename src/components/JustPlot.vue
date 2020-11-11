@@ -3,79 +3,7 @@
   <div class='canvasBox'>
     <canvas ref='canvas' id='canvas'></canvas>
   </div>
-  <div id='controls'>
-    
-    <label>Playback Mode</label>
-    <div class='subControl' v-for="mode in playbackModes" :key='mode.id'>
-      <input type='radio' id='mode.id' name='playbackMode' :checked='mode.state'
-          :value='mode.id' @change='updatePlaybackMode' v-model='playbackMode'>
-      <label for='mode.id'>{{mode.id}}</label>
-    </div>
 
-    <label>Audition Mode</label>
-    <div class='subControl' v-for="mode in sonificationModes" :key='mode.id'>
-      <input type='radio' id='mode.id' name='auditionMode' :value='mode.id' 
-          :checked='mode.state' v-model='audition' @change='sendAudition'>
-      <label for='mode.id'>{{mode.id}}</label>
-    </div>
-
-    <label>Display</label>
-    <div class='subControl' v-for="display in displays" :key='display.id'>
-      <input type='checkbox' v-model='display.checked' @change='updateDisplay'>
-      <label>{{display.id}}</label>
-    </div>
-
-    <label>Dimensions</label>
-    <div class='dims'>
-      <div v-for='(dim, i) in dims' :key='i'>
-        <label>{{dim.axis}}</label>
-        <select v-model='dim.value' @change='updateDim'>
-          <option v-for='prime in primes' :value='prime' :key='prime'>
-            {{prime}}
-          </option>
-        </select>
-      </div>
-    </div>
-
-    <label>Octave Shift</label>
-    <div class='dims'>
-      <div v-for='(dim, i) in dims' :key='i'>
-        <label>{{dim.axis}}</label>
-        <select v-model='dim.oct' @change='updateDim'>
-          <option v-for='oct in octave' :value='oct' :key='oct'>
-            {{oct}}
-          </option>
-        </select>
-      </div>
-    </div>
-
-    <label>Rotations</label>
-    <div class='rotations'>
-      <div v-for='(rot, i) in rotations' :key='i'>
-        <input type='radio' :value='i' :checked='rot' v-model='checkedRotation' 
-            @change='newChord(points)'>
-      </div>
-    </div>
-
-    <label>Fundamental</label>
-    <div class='fundamental'>
-      <input type='range' min='0' :max='fundOctaves' step='0.001' 
-          v-model='fundSliderVal' @input='updateFund'>
-      <label>{{(fundMin * (2 ** fundSliderVal)).toFixed(0)}}</label>
-    </div>
-
-    <label>Gain</label>
-    <div class='gain'>
-      <input type='range' min='0' :max='1' step='0.001' v-model='gainSliderVal' 
-          @input='updateMasterGain'>
-      <label>{{parseFloat(gainSliderVal).toFixed(2)}}</label>
-    </div>
-
-
-    <div class='buttonBox'>
-      <button v-if="multipleRoots" @click='swapRoot'>Swap Root</button>
-    </div>
-  </div>
 </div>
 </template>
 
@@ -134,6 +62,7 @@ export default {
       multipleRoots: false,
       initPosition: [3.5, 6.5, 6.5],
       gainSliderVal: 0.5,
+      fullComplement: [],
 
       chords: {
         0: chords0,
@@ -147,7 +76,7 @@ export default {
       primes: [2, 3, 5, 7, 11, 13, 17, 19],
       octave: [0, -1, -2, -3, -4, -5],
 
-      checkedRotation: 0,
+      rotation: 0,
       rotations: Array(6),
       dims: {
         dim1: {
@@ -192,16 +121,11 @@ export default {
         }
       },
 
-      displays: {
-        rotationShell: {
-          id: 'rotationShell',
-          checked: false,
-        }
-      }
+      displays: 'none'
     }
   },
   mounted() {
-    this.width = window.innerWidth - 450 - 200;
+    this.width = window.innerWidth - 650 - 200;
     this.setUpVisuals();
     this.$nextTick(() => this.sendControlPacket());
 
@@ -213,13 +137,32 @@ export default {
       this.points = chordPacket.newChord;
       this.roots = chordPacket.roots;
       this.rotationShell = chordPacket.rotationShell;
-      this.multipleRoots = this.roots.length > 1
+      this.multipleRoots = this.roots.length > 1;
       this.primaryRoot = chordPacket.primaryRoot;
+      this.fullComplement = chordPacket.fullComplement
+      console.log(chordPacket)
       this.newChord();
     });
     
     EventBus.$on('currentGains', currentGains => {
       this.currentGains = currentGains;
+    });
+    
+    EventBus.$on('playbackMode', playbackMode => {
+      this.playbackMode = playbackMode;
+      this.updatePlaybackMode();
+    });
+    
+    EventBus.$on('displays', displays => {
+      this.displays = displays;
+      this.updateDisplay();
+    });
+    
+    EventBus.$on('controlPacket', cp => {
+      this.playbackMode = cp.playbackMode;
+      this.rotation = cp.rotation;
+      this.newChord();
+      
     })
     
     
@@ -265,7 +208,7 @@ export default {
         auditionMode: this.audition,
         dims: dims,
         octs: octs,
-        rotation: this.checkedRotation,
+        rotation: this.rotation,
         fundamental: this.fund,
         masterGain: this.gainSliderVal,
         audition: this.audition
@@ -280,7 +223,7 @@ export default {
       // applying a new rotation, removes old chord and instantiates new chord
       // (both audio and visuals). 
 
-      this.sendControlPacket();
+      // this.sendControlPacket();
       if (this.chordOn) {
         this.spheres.forEach(sphere => {
           if (sphere.stopGainNode) this.stopNote(sphere);
@@ -295,10 +238,15 @@ export default {
       const extraRotShell = this.rotationShell.filter(point => {
         return !nestedInclude(points, point)
       });
+      this.rotatedFullComplement = this.fullComplement.map(this.rotate); 
+      const extraFullComplement = this.rotatedFullComplement.filter(point => {
+        return !nestedInclude(points, point)
+      });
 
       // Rotation shell will only be seen when the 'Rotation Shell' display 
       // checkbox is selected. 
       extraRotShell.forEach(point => this.addSphere(...point));
+      extraFullComplement.forEach(point => this.addSphere(...point, 5))
 
       Promise.all(promises).then(() => {
         this.render()
@@ -345,9 +293,6 @@ export default {
       EventBus.$emit('fundamental', this.fund);
     },
     
-    sendFundamental() {
-      EventBus.$emit('fundamental', this.fund)
-    },
 
     swapRoot() {
       // In chords with multiple roots, assigns a new primary root, which will
@@ -370,7 +315,7 @@ export default {
       // For a given point in cartesian coordinates, returns the coordinates of 
       // the 'rotated' version of that point. Each 'rotation' represents a swap
       // of axes. In 3D, for example, there are 6 different 'rotations' of a 
-      // given point. `this.checkedRotation` provides the index of the current 
+      // given point. `this.rotation` provides the index of the current 
       // rotation.
       const maps = [
         [0, 1, 2],
@@ -381,7 +326,7 @@ export default {
         [2, 1, 0]
       ];
       const translatedPoint = point.map((pt, i) => pt - this.points[this.primaryRoot][i]);
-      const rotatedTranslatedPoint = maps[this.checkedRotation].map(i => translatedPoint[i]);
+      const rotatedTranslatedPoint = maps[this.rotation].map(i => translatedPoint[i]);
       const rotatedPoint = rotatedTranslatedPoint.map((pt, i) => pt + this.points[this.primaryRoot][i]);
       return rotatedPoint
     },
@@ -391,9 +336,18 @@ export default {
       // shell. Rotation shell spheres are in layer 1; rotation shell connections
       // are in layer 3. 
       this.camera.layers.disableAll();
-      if (this.displays.rotationShell.checked) {
-        this.camera.layers.enableAll();
-      } else {
+      console.log(this.displays)
+      if (this.displays == 'rotationShell') {
+        this.camera.layers.enable(0);
+        this.camera.layers.enable(1);
+        this.camera.layers.enable(2);
+        this.camera.layers.enable(3);
+        // this.camera.layers.enable(4);
+      } else if (this.displays == 'fullComplement') {
+        this.camera.layers.enable(1);
+        this.camera.layers.enable(3);
+        this.camera.layers.enable(5);
+      } else if (this.displays == 'none') {
         this.camera.layers.enable(1);
         this.camera.layers.enable(3);
       }
@@ -427,7 +381,7 @@ export default {
       // 'fixed': Oscillators at full gain.
       // 'off': Oscillators at zero gain.
       // 'drone': Oscillators perform a random walk, starting at full gain.
-      EventBus.$emit('playbackMode', this.playbackMode);    
+      // EventBus.$emit('playbackMode', this.playbackMode);    
       if (this.playbackMode === 'drone') {
         if (!this.animator) this.animate();
       } else {
@@ -452,7 +406,7 @@ export default {
       // Adjusts size and aspec ratio of canvas element / renderer according to 
       // current window size, and size of panel components. 
 
-      this.width = window.innerWidth - 450 - 200;
+      this.width = window.innerWidth - 650 - 200;
       this.camera.aspect = this.width / window.innerHeight;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(this.width, window.innerHeight);
@@ -502,7 +456,8 @@ export default {
       this.camera.lookAt(...center);
       const removes = this.scene.children.filter(child => child.geometry && child.geometry.type === 'CylinderGeometry');
       removes.forEach(child => this.scene.remove(child));
-      this.drawConnections(this.spheres.map(sphere => this.getPosition(sphere)), 2);
+      this.drawConnections(this.rotationShell, 2);
+      this.drawConnections(this.rotatedFullComplement, 5)
       this.drawConnections(this.onSpheres.map(sphere => this.getPosition(sphere)), 3);
       this.$nextTick(() => {
         this.renderer.render(this.scene, this.camera)
@@ -516,7 +471,7 @@ export default {
       return [obj.position.x, obj.position.y, obj.position.z]
     },
 
-    addSphere(x, y, z) {
+    addSphere(x, y, z, layer = undefined) {
 
       // Adds sphere to scene at given cartesian coordinates. 
 
@@ -529,7 +484,7 @@ export default {
       sphere.position.x = x;
       sphere.position.y = y;
       sphere.position.z = z;
-      sphere.layers.set(0);
+      layer ? sphere.layers.set(layer) : sphere.layers.set(0);
       this.scene.add(sphere);
       this.spheres.push(sphere);
       return sphere
@@ -541,7 +496,7 @@ export default {
 
       var geometry = new THREE.CylinderGeometry(0.02, 0.02, 1, 4);
       var material = new THREE.MeshPhongMaterial({
-        color: layer === 2 ? this.shellColor : this.sphereColor
+        color: layer === 2 || layer === 5  ? this.shellColor : this.sphereColor
       });
       const cylinder = new THREE.Mesh(geometry, material);
       cylinder.position.x = (a[0] + b[0]) / 2;
@@ -576,7 +531,7 @@ export default {
   height: 100vh;
 }
 
-#controls {
+/* #controls {
   z-index: 1;
   position: absolute;
   top: 0;
@@ -589,9 +544,6 @@ export default {
   display: flex;
   flex-direction: column;
   align-content: flex-start;
-  /* justify-content: center; */
-
-  /* border: 1px solid blue; */
 }
 
 label {
@@ -677,5 +629,5 @@ input:focus {
 .buttonBox>button {
   width: 100px;
   height: 25px;
-}
+} */
 </style>

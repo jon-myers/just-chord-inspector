@@ -12,4 +12,4 @@ npm install
 npm run serve
 ```
 
-### Only works in Firefox currently. I'm not sure why it doesn't work in Chrome. I know why it doesn't work in Safari. 
+### Only works on Desktops in Firefox and Chrome.

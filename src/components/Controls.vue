@@ -178,19 +178,19 @@ export default {
       synths: {
         sine: {
           name: 'Sine',
-          sliderVal: 0.35,
+          sliderVal: 0.1,
         },
         tri: {
           name: 'Tri',
-          sliderVal: 0.35,
+          sliderVal: 0.9,
         },
         square: {
           name: 'Square', 
-          sliderVal: 0.15,
+          sliderVal: 0.0,
         },
         saw: {
           name: 'Saw',
-          sliderVal: 0.15,
+          sliderVal: 0.0,
         }
       }
     }

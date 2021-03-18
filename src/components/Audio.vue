@@ -5,7 +5,7 @@
 
 <script>
 
-import monoEncodeUrl from 'worklet-loader!./../audioWorklets/monoEncode.js';
+import monoEncodeUrl from '../audioWorklets/monoEncode.Worklet.js';
 import Omnitone from '../../node_modules/omnitone/build/omnitone.min.esm.js';
 import EventBus from '../eventBus.js';
 
@@ -19,10 +19,10 @@ export default {
       slewTime: 0.01,
       masterGain: 0.5,
       chord: [],
-      sineLevel: 0.35,
-      triLevel: 0.35,
-      squareLevel: 0.15,
-      sawtoothLevel: 0.15,      
+      sineLevel: 0.1,
+      triLevel: 0.9,
+      squareLevel: 0,
+      sawtoothLevel: 0,      
     }
   },
   
